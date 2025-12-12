@@ -1,0 +1,69 @@
+import os
+import scanpy as sc
+import scanpy.external as sce
+import matplotlib.pyplot as plt
+# 確保所有變數都已定義，如果這個腳本單獨執行，需要確保 combined_adata 已經存在於記憶體中或從硬碟載入。
+
+# ==============================================================================
+# 實驗記錄區塊 2: 載入、分析、降維與最終存檔
+# ==============================================================================
+
+# 1. 設定路徑與載入數據
+base_path = r"C:\Users\User\Desktop\Single cell for CoQ\Dataset_raw"
+output_h5ad = os.path.join(base_path, "Combined_Muscle_Data_Ready.h5ad")
+
+print("--- 階段 1: 載入數據 ---")
+# 重新載入數據 (假設數據已在第一階段儲存)
+combined_adata = sc.read_h5ad(output_h5ad)
+print(f"✅ 數據已成功載入！總細胞數: {combined_adata.n_obs}")
+
+print("\n--- 階段 2: Harmony 整合與 UMAP 降維 (記憶體優化模式) ---")
+
+# 2. 預處理與 HVG 篩選
+combined_adata.raw = combined_adata # 確保 .raw 存在
+print("-> 挑選高變異基因 (n_top_genes=2000, flavor='seurat_v3')...")
+sc.pp.highly_variable_genes(combined_adata, n_top_genes=2000, flavor='seurat_v3')
+
+# 3. PCA 降維 (降維步驟 - 記憶體優化技巧)
+print("-> 執行 PCA 降維 (PCs=50, zero-center=True)...")
+adata_hvg = combined_adata[:, combined_adata.var.highly_variable].copy()
+sc.tl.pca(adata_hvg, svd_solver='arpack', n_comps=50, zero_center=True)
+combined_adata.obsm['X_pca'] = adata_hvg.obsm['X_pca'] # 傳回 PCA 結果
+del adata_hvg # 釋放記憶體
+
+# 4. Harmony 整合
+print("-> 執行 Harmony (Key='subject_id')...")
+sce.pp.harmony_integrate(combined_adata, 'subject_id', max_iter_harmony=10)
+
+# 5. 計算 Neighbors & UMAP
+print("-> 計算 Neighbors & UMAP...")
+sc.pp.neighbors(combined_adata, n_neighbors=30, n_pcs=30, use_rep='X_pca_harmony')
+sc.tl.umap(combined_adata)
+
+# 6. 繪圖驗收 (Visualization)
+print("\n--- 階段 3: 繪圖驗證 ---")
+sc.set_figure_params(figsize=(6, 6), frameon=False)
+
+# 圖 A: China vs Europe 批次混合檢查
+print("-> 繪圖 A: China vs Europe Integration Check")
+sc.pl.umap(combined_adata, color=['batch'], title='Integration Check (China vs Europe)', alpha=0.6, show=True)
+
+
+# 圖 B: Subject ID 混合檢查
+print("-> 繪圖 B: Subject Integration Check")
+sc.pl.umap(combined_adata, color=['subject_id'], title='Subject Integration (Harmony)', legend_loc='on data', legend_fontsize=5, show=True)
+
+
+# ==============================================================================
+# 最終步驟：儲存包含 Harmony 和 UMAP 結果的 AnnData 物件
+# ==============================================================================
+
+print("\n--- 階段 4: 最終儲存分析結果 ---")
+print("正在將 Harmony/UMAP 座標和結果存回硬碟...")
+
+# 將包含所有分析結果的 combined_adata 物件存檔
+# 因為 combined_adata 已經被更新了 (obsm, uns, obsp)，現在存檔是記錄分析進度
+combined_adata.write(output_h5ad)
+print(f"✅ 數據已成功存檔！路徑: {output_h5ad}")
+
+print("✅ 恭喜！分析與存檔腳本完成，您可以將此代碼用於您的 GitHub 記錄。")
