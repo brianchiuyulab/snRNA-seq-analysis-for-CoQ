@@ -1,0 +1,63 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import os
+import argparse
+import scanpy as sc
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--base", required=True, help="Base folder, e.g. %CD%\\Data_raw")
+    ap.add_argument("--in_h5ad", default="step3_out/merged_harmony_precluster.h5ad")
+    ap.add_argument("--out_h5ad", default="step3_out/merged_harmony_louvain.h5ad")
+    ap.add_argument("--resolution", type=float, default=1.0)
+    ap.add_argument("--seed", type=int, default=0)
+    args = ap.parse_args()
+
+    base = os.path.abspath(args.base)
+    in_path = args.in_h5ad if os.path.isabs(args.in_h5ad) else os.path.join(base, args.in_h5ad)
+    out_path = args.out_h5ad if os.path.isabs(args.out_h5ad) else os.path.join(base, args.out_h5ad)
+
+    out_root = os.path.dirname(out_path)
+    fig_dir = os.path.join(os.path.dirname(in_path), "figs")
+    os.makedirs(out_root, exist_ok=True)
+    os.makedirs(fig_dir, exist_ok=True)
+
+    sc.settings.verbosity = 2
+    sc.settings.figdir = fig_dir
+    sc.settings.set_figure_params(dpi=150, fontsize=10)
+
+    print("[READ]", in_path)
+    adata = sc.read_h5ad(in_path)
+
+    # If neighbors missing, recompute using Harmony PCs that Step3 created
+    if "neighbors" not in adata.uns:
+        if "X_harmony_pcs" in adata.obsm:
+            use_rep = "X_harmony_pcs"
+        elif "X_pca_harmony" in adata.obsm:
+            use_rep = "X_pca_harmony"
+        else:
+            raise RuntimeError("No Harmony PCs found in .obsm. Need X_harmony_pcs or X_pca_harmony.")
+        print("[NEIGHBORS] recompute (n_neighbors=10) using", use_rep)
+        sc.pp.neighbors(adata, n_neighbors=10, use_rep=use_rep)
+
+    # If UMAP missing, compute
+    if "X_umap" not in adata.obsm:
+        print("[UMAP] compute")
+        sc.tl.umap(adata, random_state=args.seed)
+
+    print(f"[LOUVAIN] resolution={args.resolution}")
+    sc.tl.louvain(adata, resolution=args.resolution, random_state=args.seed, key_added="louvain")
+
+    print("[PLOT] umap by louvain")
+    sc.pl.umap(adata, color=["louvain"], show=False, save="_umap_by_louvain.png")
+
+    print("[WRITE]", out_path)
+    adata.write(out_path)
+
+    print("[DONE]")
+    print("  out_h5ad:", out_path)
+    print("  fig_dir :", fig_dir)
+
+if __name__ == "__main__":
+    main()
