@@ -1,21 +1,22 @@
 # -*- coding: utf-8 -*-
 """
-Step2b: Per-sample doublet detection by Scrublet (optional filtering)
+Step2b: Run Scrublet per sample and annotate doublets (do NOT filter by default)
 
 Input:
-  {BASE}/step2_out/qc_h5ad/*.qc.h5ad
+  Data_raw/step2_out/qc_h5ad/*.qc.h5ad
+
 Output:
-  {BASE}/step2_out/qc_scrublet_h5ad/*.qc_dbl.h5ad
-  {BASE}/step2_out/doublet_summary.tsv
+  Data_raw/step2_out/scrub_h5ad/*.scrub.h5ad
+  Data_raw/step2_out/scrublet_summary.tsv
 
-Adds to .obs:
-  - doublet_score
-  - predicted_doublet
-Stores to .uns:
-  - scrublet_threshold
+This step:
+- Runs Scrublet per sample on raw counts (X)
+- Adds to .obs:
+    doublet_score
+    predicted_doublet
+- Does NOT filter out doublets unless --filter_doublets is passed
+- Automatically handles small samples by skipping or adapting PCA dimensions
 """
-
-from __future__ import annotations
 
 import os
 import glob
@@ -25,45 +26,44 @@ import pandas as pd
 import anndata as ad
 import scipy.sparse as sp
 
-def to_csr(X) -> sp.csr_matrix:
+# scrublet import (installed via pip)
+import scrublet as scr
+
+def to_csr(X):
     if sp.issparse(X):
         return X.tocsr()
     return sp.csr_matrix(X)
 
-def ensure_dir(p: str) -> None:
+def ensure_dir(p: str):
     os.makedirs(p, exist_ok=True)
 
-def parse_args():
-    p = argparse.ArgumentParser()
-    p.add_argument("--base", required=True, type=str,
-                   help="e.g. C:/Users/User/Desktop/Single cell for CoQ/Data_raw")
-    p.add_argument("--expected_doublet_rate", type=float, default=0.06)
-    p.add_argument("--n_pcs", type=int, default=30)
-    p.add_argument("--use_approx_neighbors", action="store_true",
-                   help="Needs annoy. Default OFF for Windows safety.")
-    p.add_argument("--filter_doublets", action="store_true",
-                   help="Remove predicted_doublet cells after scoring.")
-    p.add_argument("--random_state", type=int, default=0)
-    return p.parse_args()
+def safe_int(x, default=0):
+    try:
+        return int(x)
+    except Exception:
+        return default
 
 def main():
-    args = parse_args()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--base", required=True, help="Base path, e.g. C:/Users/User/Desktop/Single cell for CoQ/Data_raw")
+    ap.add_argument("--filter_doublets", action="store_true", help="If set, remove predicted doublets and write filtered object")
+    ap.add_argument("--expected_doublet_rate", type=float, default=0.06, help="Scrublet expected_doublet_rate")
+    ap.add_argument("--sim_doublet_ratio", type=float, default=2.0, help="Scrublet sim_doublet_ratio")
+    ap.add_argument("--pca_n", type=int, default=30, help="Target PCA components (will be auto-capped)")
+    ap.add_argument("--min_cells_for_scrublet", type=int, default=200, help="Skip Scrublet if cells < this")
+    args = ap.parse_args()
 
-    in_glob = os.path.join(args.base, "step2_out", "qc_h5ad", "*.qc.h5ad")
-    out_root = os.path.join(args.base, "step2_out")
-    out_dir = os.path.join(out_root, "qc_scrublet_h5ad")
-    out_summary = os.path.join(out_root, "doublet_summary.tsv")
+    BASE = args.base
 
-    ensure_dir(out_dir)
+    IN_GLOB = os.path.join(BASE, "step2_out", "qc_h5ad", "*.qc.h5ad")
+    OUT_DIR = os.path.join(BASE, "step2_out", "scrub_h5ad")
+    OUT_SUMMARY = os.path.join(BASE, "step2_out", "scrublet_summary.tsv")
 
-    fs = sorted(glob.glob(in_glob))
+    ensure_dir(OUT_DIR)
+
+    fs = sorted(glob.glob(IN_GLOB))
     if len(fs) == 0:
-        raise FileNotFoundError(f"No input files found: {in_glob}")
-
-    try:
-        import scrublet as scr
-    except Exception as e:
-        raise RuntimeError(f"Scrublet import failed: {e}")
+        raise FileNotFoundError(f"No input files found: {IN_GLOB}")
 
     rows = []
 
@@ -72,70 +72,87 @@ def main():
         print(f"[{i}/{len(fs)}] [LOAD] {sample}")
 
         a = ad.read_h5ad(f)
-        if a.n_obs == 0:
-            out = os.path.join(out_dir, f"{sample}.qc_dbl.h5ad")
-            a.write_h5ad(out)
-            rows.append({
-                "sample_id": sample,
-                "n_cells_in": 0,
-                "n_predicted_doublet": 0,
-                "n_cells_out": 0,
-                "expected_doublet_rate": args.expected_doublet_rate,
-                "n_pcs": args.n_pcs,
-                "use_approx_neighbors": bool(args.use_approx_neighbors),
-                "scrublet_threshold": np.nan,
-                "filtered": bool(args.filter_doublets),
-            })
-            continue
-
         X = to_csr(a.X)
 
-        scrub = scr.Scrublet(
-            X,
-            expected_doublet_rate=args.expected_doublet_rate,
-            random_state=args.random_state,
-        )
+        n_cells = int(a.n_obs)
+        n_genes = int(a.n_vars)
 
-        scores, preds = scrub.scrub_doublets(
-            n_prin_comps=args.n_pcs,
-            use_approx_neighbors=args.use_approx_neighbors,
-        )
+        # default placeholders
+        a.obs["doublet_score"] = np.nan
+        a.obs["predicted_doublet"] = False
 
-        a.obs["doublet_score"] = np.asarray(scores, dtype=np.float64)
-        a.obs["predicted_doublet"] = np.asarray(preds, dtype=bool)
-        thr = float(getattr(scrub, "threshold_", np.nan))
-        a.uns["scrublet_threshold"] = thr
+        ran = False
+        skipped_reason = ""
 
-        n_in = int(a.n_obs)
-        n_dbl = int(np.sum(a.obs["predicted_doublet"].values))
+        # skip very small samples
+        if n_cells < args.min_cells_for_scrublet:
+            skipped_reason = f"skip_n_cells<{args.min_cells_for_scrublet}"
+            print(f"  [SKIP] {sample}: n_cells={n_cells} (<{args.min_cells_for_scrublet})")
+        else:
+            # Scrublet PCA components must be <= min(n_samples, n_features)
+            # Use a conservative cap to avoid arpack errors
+            # Need at least 2 to do PCA meaningfully, otherwise skip
+            max_pca = min(args.pca_n, n_cells - 1, n_genes - 1)
+            if max_pca < 2:
+                skipped_reason = f"skip_pca_cap<2 (n_cells={n_cells}, n_genes={n_genes})"
+                print(f"  [SKIP] {sample}: {skipped_reason}")
+            else:
+                # run scrublet
+                try:
+                    scrub = scr.Scrublet(
+                        X,
+                        expected_doublet_rate=args.expected_doublet_rate,
+                        sim_doublet_ratio=args.sim_doublet_ratio
+                    )
+                    scores, preds = scrub.scrub_doublets(n_prin_comps=max_pca)
+                    a.obs["doublet_score"] = scores.astype(np.float32)
+                    a.obs["predicted_doublet"] = preds.astype(bool)
+                    ran = True
+                    print(f"  [OK] Scrublet ran: pca_n={max_pca} | predicted_doublets={int(preds.sum())}/{n_cells}")
+                except Exception as e:
+                    skipped_reason = f"error:{type(e).__name__}"
+                    print(f"  [ERROR] {sample}: {e}")
+                    # keep placeholders (NaN/False) and continue
 
-        if args.filter_doublets:
+        # optionally filter
+        n0 = int(a.n_obs)
+        if args.filter_doublets and ran:
             keep = ~a.obs["predicted_doublet"].values
             a_out = a[keep].copy()
         else:
             a_out = a
 
-        n_out = int(a_out.n_obs)
-        out = os.path.join(out_dir, f"{sample}.qc_dbl.h5ad")
-        a_out.write_h5ad(out)
+        n1 = int(a_out.n_obs)
 
-        print(f"[WRITE] {sample}: in={n_in}, pred_doublet={n_dbl}, out={n_out}, thr={thr}")
+        out_path = os.path.join(OUT_DIR, f"{sample}.scrub.h5ad")
+        a_out.write_h5ad(out_path)
+
+        # summary
+        pred_n = safe_int(a.obs["predicted_doublet"].sum(), 0) if ran else 0
+        pred_rate = (pred_n / n0) if (ran and n0 > 0) else np.nan
 
         rows.append({
             "sample_id": sample,
-            "n_cells_in": n_in,
-            "n_predicted_doublet": n_dbl,
-            "n_cells_out": n_out,
+            "n_cells_in": n0,
+            "n_genes": n_genes,
+            "scrublet_ran": ran,
+            "skipped_reason": skipped_reason,
             "expected_doublet_rate": args.expected_doublet_rate,
-            "n_pcs": args.n_pcs,
-            "use_approx_neighbors": bool(args.use_approx_neighbors),
-            "scrublet_threshold": thr,
-            "filtered": bool(args.filter_doublets),
+            "sim_doublet_ratio": args.sim_doublet_ratio,
+            "pca_target": args.pca_n,
+            "pca_used": (min(args.pca_n, n0 - 1, n_genes - 1) if ran else np.nan),
+            "n_predicted_doublets": pred_n,
+            "predicted_doublet_rate": pred_rate,
+            "filtered": bool(args.filter_doublets and ran),
+            "n_cells_out": n1,
+            "out_file": os.path.basename(out_path)
         })
 
+        print(f"  [WRITE] {sample}: {n0} -> {n1} cells | {os.path.basename(out_path)}")
+
     df = pd.DataFrame(rows)
-    df.to_csv(out_summary, sep="\t", index=False)
-    print(f"[OK] summary -> {out_summary}")
+    df.to_csv(OUT_SUMMARY, sep="\t", index=False)
+    print(f"[OK] summary -> {OUT_SUMMARY}")
     print(f"[OK] total_cells_out = {int(df['n_cells_out'].sum())}")
 
 if __name__ == "__main__":
