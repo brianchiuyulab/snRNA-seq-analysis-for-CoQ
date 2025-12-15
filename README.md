@@ -1,1 +1,1 @@
-# snRNA-sew-analysis-for-CoQ
+# snRNA-seq-analysis-for-CoQ
