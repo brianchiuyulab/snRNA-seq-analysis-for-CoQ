@@ -1,0 +1,81 @@
+import os
+import argparse
+import scanpy as sc
+import pandas as pd
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--in_h5ad", required=True)
+    ap.add_argument("--out_dir", required=True)
+    ap.add_argument("--label_key", default="paper_celltype_cluster_level_final")
+    ap.add_argument("--unassigned_name", default="Unassigned")
+    ap.add_argument("--method", default="wilcoxon", choices=["wilcoxon", "t-test", "logreg"])
+    ap.add_argument("--n_top", type=int, default=300)
+    ap.add_argument("--use_raw", action="store_true")
+    ap.add_argument("--no_plots", action="store_true")
+    args = ap.parse_args()
+
+    os.makedirs(args.out_dir, exist_ok=True)
+
+    print("[READ]", args.in_h5ad)
+    ad = sc.read_h5ad(args.in_h5ad)
+
+    if args.label_key not in ad.obs.columns:
+        raise SystemExit(f"[ERROR] label_key not found: {args.label_key}")
+
+    use_raw = bool(args.use_raw) and (ad.raw is not None)
+    print("[INFO] use_raw =", use_raw, "| method =", args.method, "| n_top =", args.n_top)
+
+    uflag = "is_unassigned_tmp"
+    ad.obs[uflag] = "Rest"
+    m = ad.obs[args.label_key].astype(str).eq(args.unassigned_name)
+    ad.obs.loc[m, uflag] = "Unassigned"
+    print("[INFO] Unassigned n =", int(m.sum()), "/ total =", ad.n_obs)
+
+    print("[RUN] sc.tl.rank_genes_groups ...")
+    sc.tl.rank_genes_groups(
+        ad,
+        groupby=uflag,
+        groups=["Unassigned"],
+        reference="Rest",
+        method=args.method,
+        use_raw=use_raw,
+        n_genes=args.n_top
+    )
+    print("[DONE] rank_genes_groups")
+
+    df = sc.get.rank_genes_groups_df(ad, group="Unassigned")
+    out_csv = os.path.join(args.out_dir, f"markers_unassigned_vs_rest__{args.method}.csv")
+    df.to_csv(out_csv, index=False)
+    print("[WRITE]", out_csv)
+
+    show = df.loc[:, ["names", "logfoldchanges", "pvals_adj", "scores"]].head(30)
+    print("\n[TOP30 Unassigned markers]")
+    print(show.to_string(index=False))
+
+    if args.no_plots:
+        print("[SKIP] plots (--no_plots)")
+        print("[DONE]")
+        return
+
+    import matplotlib.pyplot as plt
+    top_genes = df["names"].head(30).tolist()
+
+    print("[PLOT] heatmap top30")
+    sc.pl.rank_genes_groups_heatmap(ad, groupby=uflag, n_genes=30, show=False)
+    heat_png = os.path.join(args.out_dir, f"heatmap_top30__{args.method}.png")
+    plt.savefig(heat_png, dpi=300, bbox_inches="tight")
+    plt.close()
+    print("[WRITE]", heat_png)
+
+    print("[PLOT] dotplot top30")
+    sc.pl.dotplot(ad, var_names=top_genes, groupby=uflag, standard_scale="var", show=False)
+    dot_png = os.path.join(args.out_dir, f"dotplot_top30__{args.method}.png")
+    plt.savefig(dot_png, dpi=300, bbox_inches="tight")
+    plt.close()
+    print("[WRITE]", dot_png)
+
+    print("[DONE]")
+
+if __name__ == "__main__":
+    main()
