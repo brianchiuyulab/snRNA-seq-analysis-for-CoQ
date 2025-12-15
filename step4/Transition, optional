@@ -1,0 +1,365 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import os
+import glob
+import argparse
+from datetime import datetime
+
+import numpy as np
+import pandas as pd
+import scanpy as sc
+import anndata as ad
+import scipy.sparse as sp
+
+
+def infer_sample_id(path: str) -> str:
+    fn = os.path.basename(path)
+    if fn.endswith(".scrub.h5ad"):
+        return fn[:-len(".scrub.h5ad")]
+    if fn.endswith(".h5ad"):
+        return fn[:-len(".h5ad")]
+    return os.path.splitext(fn)[0]
+
+
+def ensure_scrublet_fields(adata: ad.AnnData) -> None:
+    if "doublet_score" not in adata.obs.columns:
+        adata.obs["doublet_score"] = np.nan
+    if "predicted_doublet" not in adata.obs.columns:
+        adata.obs["predicted_doublet"] = False
+    try:
+        adata.obs["predicted_doublet"] = adata.obs["predicted_doublet"].astype(bool)
+    except Exception:
+        pass
+
+
+def build_paper_marker_dict():
+    # Paper major labels (skeletal muscle snRNA-seq)
+    return {
+        "Type I": ["MYH7", "TNNT1", "TNNI1", "ATP2A2", "TPM3"],
+        "Type II": ["MYH1", "MYH2", "MYH4", "TNNT3", "TNNI2", "ATP2A1", "ENO3"],
+        "Specialized MF": ["CHRNA1", "MUSK", "LRP4", "RAPSN", "COL22A1", "ITGA7"],
+
+        "MuSC": ["PAX7", "MYF5", "VCAM1", "SPRY1", "MKI67"],
+        "FAP": ["PDGFRA", "DCN", "LUM", "COL1A1", "COL1A2"],
+        "Fibroblast-like": ["PI16", "THY1", "COL3A1", "COL5A1", "DCN"],
+
+        "EC": ["PECAM1", "VWF", "KDR", "EMCN"],
+        "Pericyte": ["RGS5", "CSPG4", "MCAM", "PDGFRB"],
+        "SMC": ["ACTA2", "TAGLN", "MYL9", "CNN1"],
+
+        "Myeloid cell": ["LYZ", "LST1", "C1QA", "C1QB", "APOE", "CTSS"],
+        "Lymphocyte": ["PTPRC", "CD3D", "TRAC", "NKG7", "MS4A1", "CD79A"],
+        "Mast cell": ["TPSB2", "TPSAB1", "KIT"],
+
+        "Schwann cell": ["S100B", "MPZ", "PLP1", "SOX10"],
+        "Adipocyte": ["ADIPOQ", "PLIN1", "FABP4", "LPL"],
+        "Erythrocyte": ["HBB", "HBA1", "ALAS2"],
+    }
+
+
+def harmonize_marker_case(var_names, markers):
+    var_set = set(var_names)
+    lower_map = {g.lower(): g for g in var_names}
+
+    markers_present = {}
+    missing = []
+
+    for ct, genes in markers.items():
+        present = []
+        for g in genes:
+            if g in var_set:
+                present.append(g)
+            else:
+                gl = g.lower()
+                if gl in lower_map:
+                    present.append(lower_map[gl])
+                else:
+                    missing.append((ct, g))
+        if len(present) > 0:
+            markers_present[ct] = present
+
+    miss_df = pd.DataFrame(missing, columns=["celltype", "marker_missing"])
+    return markers_present, miss_df
+
+
+def calc_qc_if_missing(adata: ad.AnnData) -> None:
+    need = []
+    for c in ["total_counts", "n_genes_by_counts", "pct_counts_mt", "pct_counts_ribo"]:
+        if c not in adata.obs.columns:
+            need.append(c)
+    if len(need) == 0:
+        return
+
+    # annotate mt / ribo genes
+    v = adata.var_names.astype(str)
+    adata.var["mt"] = v.str.startswith("mt-") | v.str.startswith("MT-")
+    adata.var["ribo"] = (
+        v.str.startswith("Rpl") | v.str.startswith("Rps") |
+        v.str.startswith("RPL") | v.str.startswith("RPS")
+    )
+
+    # ensure X is counts-like for qc metrics
+    # if X is sparse, OK; if dense, OK
+    sc.pp.calculate_qc_metrics(adata, qc_vars=["mt", "ribo"], inplace=True)
+
+
+def summarize_by_cluster(adata: ad.AnnData, cluster_key: str) -> pd.DataFrame:
+    df = adata.obs.copy()
+    if cluster_key not in df.columns:
+        raise KeyError(f"cluster_key '{cluster_key}' not found in adata.obs")
+
+    for c in ["total_counts", "n_genes_by_counts", "pct_counts_mt", "pct_counts_ribo",
+              "doublet_score", "predicted_doublet", "sample_id"]:
+        if c not in df.columns:
+            df[c] = np.nan
+
+    g = df.groupby(cluster_key, observed=True)
+
+    out = pd.DataFrame({
+        "cluster": g.size().index.astype(str),
+        "n_cells": g.size().values,
+        "doublet_rate": g["predicted_doublet"].mean().values,
+        "median_total_counts": g["total_counts"].median().values,
+        "median_n_genes": g["n_genes_by_counts"].median().values,
+        "median_pct_mt": g["pct_counts_mt"].median().values,
+        "median_pct_ribo": g["pct_counts_ribo"].median().values,
+    })
+
+    sample_comp = (
+        df.groupby([cluster_key, "sample_id"], observed=True)
+          .size()
+          .reset_index(name="n")
+    )
+    sample_comp["frac"] = sample_comp.groupby(cluster_key, observed=True)["n"].transform(lambda x: x / x.sum())
+    sample_comp[cluster_key] = sample_comp[cluster_key].astype(str)
+
+    top5 = (
+        sample_comp
+        .sort_values([cluster_key, "frac"], ascending=[True, False])
+        .groupby(cluster_key, observed=True)
+        .head(5)
+    )
+
+    top5_str = (
+        top5.groupby(cluster_key, observed=True)
+            .apply(lambda x: "; ".join([f"{r.sample_id}:{r.frac:.2f}" for r in x.itertuples(index=False)]))
+            .reset_index(name="top_samples_frac")
+            .rename(columns={cluster_key: "cluster"})
+    )
+
+    out = out.merge(top5_str, on="cluster", how="left")
+    return out
+
+
+def export_rank_genes(adata: ad.AnnData, cluster_key: str, out_tsv: str, n_top: int = 50, key_added: str = "rank_genes"):
+    sc.tl.rank_genes_groups(
+        adata,
+        groupby=cluster_key,
+        method="wilcoxon",
+        use_raw=True,
+        key_added=key_added,
+    )
+    res = adata.uns[key_added]
+    groups = res["names"].dtype.names
+
+    rows = []
+    for grp in groups:
+        names = res["names"][grp][:n_top]
+        scores = res["scores"][grp][:n_top]
+        pvals_adj = res["pvals_adj"][grp][:n_top] if "pvals_adj" in res else [np.nan] * len(names)
+        logfc = res["logfoldchanges"][grp][:n_top] if "logfoldchanges" in res else [np.nan] * len(names)
+
+        for i in range(len(names)):
+            rows.append({
+                "cluster": str(grp),
+                "rank": i + 1,
+                "gene": str(names[i]),
+                "score": float(scores[i]) if scores is not None else np.nan,
+                "logfoldchange": float(logfc[i]) if logfc is not None else np.nan,
+                "pvals_adj": float(pvals_adj[i]) if pvals_adj is not None else np.nan,
+            })
+
+    pd.DataFrame(rows).to_csv(out_tsv, sep="\t", index=False)
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Step4: QC summary + cluster markers + paper marker panels (Scanpy).")
+    ap.add_argument("--base", required=True, help=r"Base folder, e.g. C:\Users\User\Desktop\Single cell for CoQ\Data_raw")
+    ap.add_argument("--scrub_glob", default="step2_out/scrub_h5ad/*.scrub.h5ad", help="scrub h5ad glob relative to base")
+    ap.add_argument("--in_louvain_h5ad", default="step3_out/merged_harmony_louvain.h5ad", help="louvain h5ad relative to base")
+    ap.add_argument("--cluster_key", default="louvain", help="cluster column in obs")
+    ap.add_argument("--out_dir", default="step4_out", help="output dir relative to base")
+    ap.add_argument("--n_top_markers", type=int, default=50, help="top markers per cluster to export")
+    ap.add_argument("--index_unique", default="-", help="Must match Step3 concat index_unique, default '-'")
+    args = ap.parse_args()
+
+    base = os.path.abspath(args.base)
+    out_root = os.path.join(base, args.out_dir)
+    fig_dir = os.path.join(out_root, "figs")
+    os.makedirs(out_root, exist_ok=True)
+    os.makedirs(fig_dir, exist_ok=True)
+
+    sc.settings.verbosity = 2
+    sc.settings.figdir = fig_dir
+    sc.settings.set_figure_params(dpi=150, fontsize=10)
+
+    # 1) Load Louvain object (labels + UMAP)
+    in_louvain = os.path.join(base, args.in_louvain_h5ad) if not os.path.isabs(args.in_louvain_h5ad) else args.in_louvain_h5ad
+    print("[READ LOUVAIN]", in_louvain)
+    adata_l = sc.read_h5ad(in_louvain)
+
+    if args.cluster_key not in adata_l.obs.columns:
+        raise KeyError(f"'{args.cluster_key}' not found in {in_louvain}. Available: {list(adata_l.obs.columns)[:30]}")
+
+    if "X_umap" not in adata_l.obsm:
+        raise KeyError("X_umap not found in Louvain object (need UMAP coordinates).")
+
+    # 2) Merge scrub files (full genes, union)
+    scrub_pattern = os.path.join(base, args.scrub_glob)
+    files = sorted(glob.glob(scrub_pattern))
+    if len(files) == 0:
+        raise FileNotFoundError(f"No scrub files found: {scrub_pattern}")
+    print(f"[FOUND] {len(files)} scrub files")
+
+    adatas = []
+    sample_ids = []
+    for fp in files:
+        sid = infer_sample_id(fp)
+        a = sc.read_h5ad(fp)
+        a.var_names_make_unique()
+        ensure_scrublet_fields(a)
+        a.obs["sample_id"] = sid
+        adatas.append(a)
+        sample_ids.append(sid)
+
+    print("[MERGE] concatenating full genes (union, join='outer') ...")
+    adata = ad.concat(
+        adatas,
+        join="outer",
+        label="sample_id_concat",
+        keys=sample_ids,
+        index_unique=args.index_unique,
+        merge="same",
+        fill_value=0,
+    )
+
+    if "sample_id" not in adata.obs.columns:
+        adata.obs["sample_id"] = adata.obs["sample_id_concat"].astype(str)
+
+    ensure_scrublet_fields(adata)
+
+    # 3) Align to Louvain cell order and transfer labels + UMAP
+    ref = adata_l.obs_names
+    missing = ref.difference(adata.obs_names)
+    if len(missing) > 0:
+        raise RuntimeError(
+            f"Merged full-gene object is missing {len(missing)} cells that exist in Louvain object. "
+            f"Usually concat keys/index_unique mismatch. Example missing: {list(missing[:5])}"
+        )
+    adata = adata[ref].copy()
+
+    adata.obs[args.cluster_key] = adata_l.obs[args.cluster_key].astype(str).values
+    adata.obsm["X_umap"] = adata_l.obsm["X_umap"].copy()
+
+    # 4) QC metrics on raw counts (snRNA-seq: mt and ribo both computed if absent)
+    print("[QC] calculate_qc_metrics if missing")
+    calc_qc_if_missing(adata)
+
+    # 5) Normalize + log1p for marker checking
+    print("[NORM] normalize_total(target_sum=1e4) + log1p")
+    adata.layers["counts"] = adata.X.copy()
+    sc.pp.normalize_total(adata, target_sum=1e4)
+    sc.pp.log1p(adata)
+    adata.raw = adata
+
+    # 6) QC summary by cluster
+    print("[QC] summarizing by cluster")
+    qc_df = summarize_by_cluster(adata, args.cluster_key)
+    qc_path = os.path.join(out_root, "cluster_qc_summary.tsv")
+    qc_df.to_csv(qc_path, sep="\t", index=False)
+
+    # 7) Rank genes per cluster
+    print("[MARKERS] rank_genes_groups (wilcoxon, use_raw=True)")
+    markers_path = os.path.join(out_root, f"cluster_markers_top{args.n_top_markers}.tsv")
+    export_rank_genes(adata, args.cluster_key, markers_path, n_top=args.n_top_markers, key_added="rank_genes")
+
+    # 8) Paper marker dotplot
+    marker_dict = build_paper_marker_dict()
+    marker_present, miss_df = harmonize_marker_case(adata.raw.var_names, marker_dict)
+    miss_path = os.path.join(out_root, "paper_marker_missing.tsv")
+    miss_df.to_csv(miss_path, sep="\t", index=False)
+
+    print("[PLOT] dotplot paper markers")
+    if len(marker_present) > 0:
+        sc.pl.dotplot(
+            adata,
+            marker_present,
+            groupby=args.cluster_key,
+            use_raw=True,
+            show=False,
+            save="_paper_markers.png",
+        )
+    else:
+        print("[WARN] no marker genes found in var_names.")
+
+    # 9) UMAP plots
+    print("[PLOT] UMAP by cluster/sample/doublet")
+    sc.pl.umap(adata, color=[args.cluster_key], show=False, save="_by_cluster.png")
+    if "sample_id" in adata.obs.columns:
+        sc.pl.umap(adata, color=["sample_id"], show=False, save="_by_sample.png")
+    if "predicted_doublet" in adata.obs.columns:
+        sc.pl.umap(adata, color=["predicted_doublet"], show=False, save="_by_predicted_doublet.png")
+
+    # 10) Feature UMAP for key markers (up to 16)
+    quick_genes = []
+    for ct, genes in marker_present.items():
+        for g in genes[:2]:
+            quick_genes.append(g)
+    quick_genes = list(dict.fromkeys(quick_genes))[:16]
+    if len(quick_genes) > 0:
+        sc.pl.umap(adata, color=quick_genes, use_raw=True, show=False, save="_key_markers.png")
+
+    # 11) Template (paper label column)
+    clusters = sorted(
+        adata.obs[args.cluster_key].unique(),
+        key=lambda x: int(x) if str(x).isdigit() else str(x)
+    )
+    template = pd.DataFrame({
+        args.cluster_key: clusters,
+        "paper_celltype": [""] * len(clusters),
+        "notes_marker_evidence": [""] * len(clusters),
+    })
+    template_path = os.path.join(out_root, "cluster_to_celltype_template.tsv")
+    template.to_csv(template_path, sep="\t", index=False)
+
+    # 12) Save Step4 output h5ad
+    out_h5ad = os.path.join(out_root, "merged_fullgenes_with_louvain_umap.h5ad")
+    adata.write(out_h5ad)
+
+    summary = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "input_louvain_h5ad": in_louvain,
+        "scrub_glob": scrub_pattern,
+        "n_cells": int(adata.n_obs),
+        "n_genes_union": int(adata.n_vars),
+        "cluster_key": args.cluster_key,
+        "out_h5ad": out_h5ad,
+        "qc_summary_tsv": qc_path,
+        "markers_tsv": markers_path,
+        "paper_marker_missing_tsv": miss_path,
+        "template_tsv": template_path,
+        "fig_dir": fig_dir,
+    }
+    pd.DataFrame([summary]).to_csv(os.path.join(out_root, "step4_summary.tsv"), sep="\t", index=False)
+
+    print("[DONE]")
+    print("  out_h5ad :", out_h5ad)
+    print("  qc       :", qc_path)
+    print("  markers  :", markers_path)
+    print("  template :", template_path)
+    print("  figs     :", fig_dir)
+
+
+if __name__ == "__main__":
+    main()
