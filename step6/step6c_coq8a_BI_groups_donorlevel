@@ -1,0 +1,449 @@
+# -*- coding: utf-8 -*-
+import os
+import argparse
+import numpy as np
+import pandas as pd
+import scanpy as sc
+import scipy.sparse as sp
+from scipy.stats import ttest_ind, mannwhitneyu, kruskal, spearmanr
+import matplotlib.pyplot as plt
+
+
+def ensure_dir(p):
+    os.makedirs(p, exist_ok=True)
+    return p
+
+
+def pick_col(df: pd.DataFrame, candidates):
+    for c in candidates:
+        if c in df.columns:
+            return c
+    return None
+
+
+def to_1d(x):
+    if sp.issparse(x):
+        if hasattr(x, "A1"):
+            return np.asarray(x.A1).reshape(-1)
+        return np.asarray(x.toarray()).reshape(-1)
+    if hasattr(x, "A1"):
+        x = x.A1
+    x = np.asarray(x)
+    return x.reshape(-1)
+
+
+def safe_mwu(a, b):
+    a = pd.Series(a).dropna().values.astype(float)
+    b = pd.Series(b).dropna().values.astype(float)
+    if len(a) >= 2 and len(b) >= 2:
+        try:
+            return float(mannwhitneyu(a, b, alternative="two-sided").pvalue)
+        except ValueError:
+            return 1.0
+    return np.nan
+
+
+def safe_ttest(a, b):
+    a = pd.Series(a).dropna().values.astype(float)
+    b = pd.Series(b).dropna().values.astype(float)
+    if len(a) >= 2 and len(b) >= 2:
+        try:
+            return float(ttest_ind(a, b, equal_var=False, nan_policy="omit").pvalue)
+        except Exception:
+            return np.nan
+    return np.nan
+
+
+def bh_fdr(pvals: dict):
+    keys = [k for k, p in pvals.items() if p == p]
+    ps = np.array([pvals[k] for k in keys], dtype=float)
+    if ps.size == 0:
+        return {}
+    order = np.argsort(ps)
+    ranked = ps[order]
+    m = len(ranked)
+    adj = np.empty_like(ranked)
+    prev = 1.0
+    for i in range(m - 1, -1, -1):
+        q = ranked[i] * m / (i + 1)
+        prev = min(prev, q)
+        adj[i] = prev
+    adj = np.clip(adj, 0, 1)
+    out = {}
+    for idx, k in enumerate(np.array(keys, dtype=object)[order]):
+        out[tuple(k)] = float(adj[idx])
+    return out
+
+
+def stars(p):
+    if not (p == p):
+        return "n.s."
+    if p < 0.001:
+        return "***"
+    if p < 0.01:
+        return "**"
+    if p < 0.05:
+        return "*"
+    return "n.s."
+
+
+def set_nature_style():
+    plt.rcParams.update({
+        "figure.dpi": 150,
+        "savefig.dpi": 300,
+        "font.size": 11,
+        "axes.titlesize": 13,
+        "axes.labelsize": 12,
+        "xtick.labelsize": 11,
+        "ytick.labelsize": 11,
+        "axes.linewidth": 1.2,
+        "xtick.major.width": 1.2,
+        "ytick.major.width": 1.2,
+        "xtick.major.size": 4,
+        "ytick.major.size": 4,
+        "pdf.fonttype": 42,
+        "ps.fonttype": 42,
+    })
+
+
+def despine(ax):
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+
+def jitter(x, n, width=0.10, seed=0):
+    rng = np.random.default_rng(seed)
+    return x + rng.uniform(-width, width, size=n)
+
+
+def bar_with_points(df, group_col, y_col, order, out_png, title, subtitle_lines=None, out_pdf=None):
+    set_nature_style()
+    fig, ax = plt.subplots(figsize=(6.2, 4.2))
+
+    means = []
+    sems = []
+    ns = []
+
+    for i, g in enumerate(order):
+        v = df.loc[df[group_col] == g, y_col].dropna().values.astype(float)
+        ns.append(int(v.size))
+        if v.size == 0:
+            means.append(np.nan)
+            sems.append(np.nan)
+        else:
+            means.append(float(np.mean(v)))
+            sems.append(float(np.std(v, ddof=1) / np.sqrt(v.size)) if v.size >= 2 else 0.0)
+
+        xs = jitter(i, v.size, width=0.12, seed=123 + i)
+        ax.scatter(xs, v, s=35, alpha=0.85, linewidths=0)
+
+    x = np.arange(len(order))
+    ax.bar(x, means, yerr=sems, capsize=4, width=0.55, alpha=0.55)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"{g}\n(n={n})" for g, n in zip(order, ns)])
+    ax.set_ylabel(y_col)
+    ax.set_title(title)
+
+    if subtitle_lines:
+        ax.text(0.5, 0.98, "\n".join(subtitle_lines), transform=ax.transAxes, ha="center", va="top", fontsize=10)
+
+    despine(ax)
+    plt.tight_layout()
+    plt.savefig(out_png)
+    if out_pdf:
+        plt.savefig(out_pdf)
+    plt.close()
+
+
+def kw_and_pairwise(df, metric, group_col="group", order=("young", "old_BI100", "old_BIlt100")):
+    groups = []
+    sizes = {}
+    for g in order:
+        v = df.loc[df[group_col] == g, metric].dropna().values.astype(float)
+        groups.append(v)
+        sizes[g] = int(v.size)
+
+    allv = np.concatenate(groups) if len(groups) else np.array([])
+    allv = allv[~np.isnan(allv)]
+
+    if allv.size == 0 or np.unique(allv).size < 2:
+        kw_p = 1.0
+        raw_ps = {(order[0], order[1]): 1.0, (order[0], order[2]): 1.0, (order[1], order[2]): 1.0}
+        adj_ps = raw_ps.copy()
+        return kw_p, raw_ps, adj_ps, sizes
+
+    if any(sizes[g] < 2 for g in order):
+        kw_p = np.nan
+    else:
+        try:
+            kw_p = float(kruskal(*groups).pvalue)
+        except ValueError:
+            kw_p = 1.0
+
+    raw_ps = {}
+    pairs = [(order[0], order[1]), (order[0], order[2]), (order[1], order[2])]
+    for a, b in pairs:
+        raw_ps[(a, b)] = safe_mwu(df.loc[df[group_col] == a, metric], df.loc[df[group_col] == b, metric])
+
+    adj_ps = bh_fdr(raw_ps)
+    return kw_p, raw_ps, adj_ps, sizes
+
+
+def resolve_gene_in_adata(ad, gene, use_raw_flag=True):
+    candidates = [gene, gene.upper(), gene.lower(), gene.capitalize()]
+
+    if gene.lower() in ["tgfb", "tgf-beta", "tgf_beta", "tgfβ", "tgf-b"]:
+        candidates = ["TGFB1", "TGFB2", "TGFB3", "Tgfb1", "Tgfb2", "Tgfb3"] + candidates
+
+    if use_raw_flag and (ad.raw is not None):
+        raw_vars = set(ad.raw.var_names)
+        for g in candidates:
+            if g in raw_vars:
+                return "raw", g
+
+    vars_ = set(ad.var_names)
+    for g in candidates:
+        if g in vars_:
+            return "var", g
+
+    return None, None
+
+
+def expr_vector(ad, gene, use_raw_flag=True):
+    src, g = resolve_gene_in_adata(ad, gene, use_raw_flag=use_raw_flag)
+    if src is None:
+        raise KeyError(f"Gene not found in ad.raw.var_names or ad.var_names: {gene}")
+    X = ad.raw[:, g].X if src == "raw" else ad[:, g].X
+    return to_1d(X), g, src
+
+
+def agg_ct_gene_metrics(obs_df, ct_name, gene_tag, ct_short):
+    m = (obs_df["label"] == ct_name)
+    sub = obs_df.loc[m, ["donor_id", gene_tag]].copy()
+    g = sub.groupby("donor_id", observed=True)
+
+    mean_all = g[gene_tag].mean().rename(f"{gene_tag}_meanlog1p_all_{ct_short}")
+
+    def pct_pos(x):
+        x = np.asarray(x, dtype=float)
+        return float(np.mean(x > 0)) if x.size else np.nan
+
+    def mean_pos(x):
+        x = np.asarray(x, dtype=float)
+        xp = x[x > 0]
+        return float(np.mean(xp)) if xp.size else np.nan
+
+    def median_pos(x):
+        x = np.asarray(x, dtype=float)
+        xp = x[x > 0]
+        return float(np.median(xp)) if xp.size else np.nan
+
+    pct = g[gene_tag].apply(pct_pos).rename(f"{gene_tag}_pct_expr_{ct_short}")
+    mean_pos_s = g[gene_tag].apply(mean_pos).rename(f"{gene_tag}_meanlog1p_pos_{ct_short}")
+    med_pos_s = g[gene_tag].apply(median_pos).rename(f"{gene_tag}_medianlog1p_pos_{ct_short}")
+
+    return mean_all, pct, mean_pos_s, med_pos_s
+
+
+def parse_genes_arg(genes_str):
+    raw = [x.strip() for x in genes_str.split(",") if x.strip()]
+    expanded = []
+    for g in raw:
+        if g.lower() == "tgfb":
+            expanded.extend(["TGFB1", "TGFB2", "TGFB3", "Tgfb1", "Tgfb2", "Tgfb3"])
+        else:
+            expanded.append(g)
+    seen = set()
+    out = []
+    for g in expanded:
+        if g not in seen:
+            seen.add(g)
+            out.append(g)
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--in_h5ad", required=True)
+    ap.add_argument("--out_dir", required=True)
+    ap.add_argument("--label_key", required=True)
+    ap.add_argument("--sample_key", default="sample_id")
+    ap.add_argument("--genes", default="COQ8A")
+    ap.add_argument("--use_raw", action="store_true")
+    ap.add_argument("--young_max", type=float, default=46)
+    ap.add_argument("--old_min", type=float, default=74)
+    ap.add_argument("--step1_test", choices=["mwu", "ttest"], default="mwu")
+    args = ap.parse_args()
+
+    out_dir = ensure_dir(args.out_dir)
+    fig_dir = ensure_dir(os.path.join(out_dir, "figs"))
+    tab_dir = ensure_dir(os.path.join(out_dir, "tables"))
+
+    print("[READ]", args.in_h5ad)
+    ad = sc.read_h5ad(args.in_h5ad)
+
+    if args.label_key not in ad.obs.columns:
+        raise KeyError(f"label_key not found: {args.label_key}")
+    if args.sample_key not in ad.obs.columns:
+        raise KeyError(f"sample_key not found: {args.sample_key}")
+
+    col_age = pick_col(ad.obs, ["Age", "age"])
+    col_bi = pick_col(ad.obs, ["Barthel_Index_BI", "Barthel Index (BI)", "BI", "bi"])
+    col_ci = pick_col(ad.obs, ["Charlson_Index_CI", "Charlson Index (CI)", "CI", "ci"])
+    missing = [k for k, v in [("Age", col_age), ("Barthel", col_bi), ("Charlson", col_ci)] if v is None]
+    if missing:
+        raise KeyError("Missing metadata columns: " + ", ".join(missing))
+
+    sid = ad.obs[args.sample_key].astype(str)
+    donor_id = sid.str.split("_").str[0].str.lower()
+    muscle_code = sid.str.split("_").str[1].str.lower()
+
+    obs = pd.DataFrame({
+        "donor_id": donor_id.values,
+        "muscle_code": muscle_code.values,
+        "label": ad.obs[args.label_key].astype(str).values,
+        "Age": pd.to_numeric(ad.obs[col_age], errors="coerce").values,
+        "Barthel_Index_BI": pd.to_numeric(ad.obs[col_bi], errors="coerce").values,
+        "Charlson_Index_CI": pd.to_numeric(ad.obs[col_ci], errors="coerce").values,
+    }, index=ad.obs_names)
+
+    genes = parse_genes_arg(args.genes)
+    print("[INFO] genes =", genes)
+
+    total = obs.groupby("donor_id", observed=True).size().rename("n_total")
+    meta = obs.groupby("donor_id", observed=True)[["Age", "Barthel_Index_BI", "Charlson_Index_CI"]].first()
+    muscles = obs.groupby("donor_id", observed=True)["muscle_code"].agg(lambda x: ",".join(sorted(set(x)))).rename("muscle_codes")
+    out = meta.join(total).join(muscles)
+
+    n_typeI = obs.loc[obs["label"] == "Type I"].groupby("donor_id", observed=True).size().rename("n_TypeI")
+    n_typeII = obs.loc[obs["label"] == "Type II"].groupby("donor_id", observed=True).size().rename("n_TypeII")
+    out = out.join(n_typeI).join(n_typeII)
+    out["prop_TypeI"] = out["n_TypeI"] / out["n_total"]
+    out["prop_TypeII"] = out["n_TypeII"] / out["n_total"]
+
+    found_genes = []
+    gene_sources = {}
+
+    for gene in genes:
+        try:
+            vec, resolved, src = expr_vector(ad, gene, use_raw_flag=args.use_raw)
+            gene_tag = resolved
+            if gene_tag in obs.columns:
+                print(f"[SKIP] {gene} resolved to {gene_tag}, already exists")
+                continue
+
+            obs[gene_tag] = vec
+            found_genes.append(gene_tag)
+            gene_sources[gene_tag] = src
+            print(f"[OK] {gene} -> {gene_tag} ({src})")
+
+            meanI_all, pctI, meanI_pos, medI_pos = agg_ct_gene_metrics(obs, "Type I", gene_tag, "TypeI")
+            meanII_all, pctII, meanII_pos, medII_pos = agg_ct_gene_metrics(obs, "Type II", gene_tag, "TypeII")
+
+            out = out.join(meanI_all).join(pctI).join(meanI_pos).join(medI_pos)
+            out = out.join(meanII_all).join(pctII).join(meanII_pos).join(medII_pos)
+
+        except KeyError as e:
+            print(f"[SKIP] {gene}: {e}")
+
+    full_tsv = os.path.join(tab_dir, "donor_level_full.tsv")
+    out.sort_values(["Age", "donor_id"]).to_csv(full_tsv, sep="\t", index=True)
+    print("[WRITE]", full_tsv)
+
+    out["age_group"] = "other"
+    out.loc[out["Age"] <= args.young_max, "age_group"] = "young"
+    out.loc[out["Age"] >= args.old_min, "age_group"] = "old"
+    df_age = out[out["age_group"].isin(["young", "old"])].copy()
+    print("[STEP1] group sizes (donors):", df_age["age_group"].value_counts().to_dict())
+
+    if args.step1_test == "ttest":
+        p_propI = safe_ttest(df_age.loc[df_age["age_group"] == "young", "prop_TypeI"],
+                             df_age.loc[df_age["age_group"] == "old", "prop_TypeI"])
+        p_propII = safe_ttest(df_age.loc[df_age["age_group"] == "young", "prop_TypeII"],
+                              df_age.loc[df_age["age_group"] == "old", "prop_TypeII"])
+    else:
+        p_propI = safe_mwu(df_age.loc[df_age["age_group"] == "young", "prop_TypeI"],
+                           df_age.loc[df_age["age_group"] == "old", "prop_TypeI"])
+        p_propII = safe_mwu(df_age.loc[df_age["age_group"] == "young", "prop_TypeII"],
+                            df_age.loc[df_age["age_group"] == "old", "prop_TypeII"])
+
+    step1_tsv = os.path.join(tab_dir, "step1_young_old_donorlevel.tsv")
+    df_age.to_csv(step1_tsv, sep="\t", index=True)
+    print("[WRITE]", step1_tsv)
+
+    bar_with_points(df_age, "age_group", "prop_TypeI", ["young", "old"],
+                    os.path.join(fig_dir, "step1_prop_TypeI_young_vs_old.png"),
+                    "STEP1: Type I proportion (donor-level)",
+                    subtitle_lines=[f"{args.step1_test} p={p_propI:.3g} ({stars(p_propI)})"] if p_propI == p_propI else ["p=n.a."],
+                    out_pdf=os.path.join(fig_dir, "step1_prop_TypeI_young_vs_old.pdf"))
+
+    bar_with_points(df_age, "age_group", "prop_TypeII", ["young", "old"],
+                    os.path.join(fig_dir, "step1_prop_TypeII_young_vs_old.png"),
+                    "STEP1: Type II proportion (donor-level)",
+                    subtitle_lines=[f"{args.step1_test} p={p_propII:.3g} ({stars(p_propII)})"] if p_propII == p_propII else ["p=n.a."],
+                    out_pdf=os.path.join(fig_dir, "step1_prop_TypeII_young_vs_old.pdf"))
+
+    bi_meta = out[out["Barthel_Index_BI"].notna()].copy()
+    bi_meta_tsv = os.path.join(tab_dir, "step2_BI_nonNA_metadata.tsv")
+    bi_meta.to_csv(bi_meta_tsv, sep="\t", index=True)
+    print("[WRITE]", bi_meta_tsv)
+
+    df_bi = out[out["Barthel_Index_BI"].notna()].copy()
+    df_bi["group"] = "other"
+    df_bi.loc[df_bi["Age"] <= args.young_max, "group"] = "young"
+    is_old = df_bi["Age"] >= args.old_min
+    df_bi.loc[is_old & (df_bi["Barthel_Index_BI"] == 100), "group"] = "old_BI100"
+    df_bi.loc[is_old & (df_bi["Barthel_Index_BI"] < 100), "group"] = "old_BIlt100"
+    df_bi = df_bi[df_bi["group"].isin(["young", "old_BI100", "old_BIlt100"])].copy()
+    print("[STEP2] group sizes (donors):", df_bi["group"].value_counts().to_dict())
+
+    step2_tsv = os.path.join(tab_dir, "step2_BI_groups_donorlevel.tsv")
+    df_bi.to_csv(step2_tsv, sep="\t", index=True)
+    print("[WRITE]", step2_tsv)
+
+    order = ("young", "old_BI100", "old_BIlt100")
+
+    metrics = ["prop_TypeI", "prop_TypeII"]
+    for g in found_genes:
+        metrics.extend([
+            f"{g}_meanlog1p_all_TypeI", f"{g}_meanlog1p_all_TypeII",
+            f"{g}_pct_expr_TypeI", f"{g}_pct_expr_TypeII",
+            f"{g}_meanlog1p_pos_TypeI", f"{g}_meanlog1p_pos_TypeII",
+            f"{g}_medianlog1p_pos_TypeI", f"{g}_medianlog1p_pos_TypeII",
+        ])
+
+    stat_rows = []
+    for metric in metrics:
+        kw_p, raw_ps, adj_ps, sizes = kw_and_pairwise(df_bi, metric, group_col="group", order=order)
+        stat_rows.append({"metric": metric, "kruskal_p": kw_p, "sizes": str(sizes)})
+        for (a, b), p in raw_ps.items():
+            stat_rows.append({"metric": metric, "pair": f"{a} vs {b}", "mwu_p": p, "mwu_p_adj": adj_ps.get((a, b), np.nan)})
+
+        subtitle = []
+        if kw_p == kw_p:
+            subtitle.append(f"Kruskal p={kw_p:.3g} ({stars(kw_p)})")
+        for (a, b) in [(order[0], order[1]), (order[0], order[2]), (order[1], order[2])]:
+            padj = adj_ps.get((a, b), np.nan)
+            if padj == padj:
+                subtitle.append(f"{a} vs {b}: p_adj={padj:.3g} ({stars(padj)})")
+
+        out_png = os.path.join(fig_dir, f"step2_{metric}_by_BIgroup.png")
+        out_pdf = os.path.join(fig_dir, f"step2_{metric}_by_BIgroup.pdf")
+        bar_with_points(df_bi, "group", metric, list(order), out_png, f"STEP2: {metric} by BI group (donor-level)", subtitle_lines=subtitle, out_pdf=out_pdf)
+
+    stat_tsv = os.path.join(tab_dir, "step2_stats_summary.tsv")
+    pd.DataFrame(stat_rows).to_csv(stat_tsv, sep="\t", index=False)
+    print("[WRITE]", stat_tsv)
+
+    src_tsv = os.path.join(tab_dir, "genes_resolved_sources.tsv")
+    pd.DataFrame([{"gene": g, "source": gene_sources.get(g, "")} for g in found_genes]).to_csv(src_tsv, sep="\t", index=False)
+    print("[WRITE]", src_tsv)
+
+    print("[DONE]")
+    print("  tables:", tab_dir)
+    print("  figs  :", fig_dir)
+
+
+if __name__ == "__main__":
+    main()
