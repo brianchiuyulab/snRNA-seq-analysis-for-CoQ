@@ -1,0 +1,799 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+"""
+Step6j (myogenic-focused):
+- Donor-level pseudobulk CPM from layers['counts'] for CoQ10 pathway genes
+- Dot plot (bubble): color=log2FC, size=-ln(p), star inside dot if p<0.05
+- COQ8A boxplot: log10FC vs young-mean baseline (per cell type), with brackets and p text
+
+Key rules:
+- No min_cells threshold. donor x celltype included if at least 1 cell exists.
+- Strict donor-level statistics (avoid pseudoreplication).
+- Myogenic cell types restricted to: MuSC, Type I, Type II, Specialized MF (robust name matching).
+"""
+
+import os
+import sys
+import argparse
+import numpy as np
+import pandas as pd
+import scanpy as sc
+from scipy import sparse
+from scipy.stats import mannwhitneyu, ttest_ind
+import matplotlib.pyplot as plt
+from matplotlib.colors import TwoSlopeNorm
+
+COQ10_GENES = ["PDSS1", "PDSS2", "COQ2", "COQ3", "COQ4", "COQ5", "COQ6", "COQ7",
+               "COQ8A", "COQ8B", "COQ9", "COQ10A", "COQ10B"]
+
+MYOGENIC_4 = ["MuSC", "Type I", "Type II", "Specialized MF"]
+
+COLORS = {
+    "young": "#7f7f7f",
+    "old_BI100": "#f0a202",
+    "old_BIlt100": "#d62728",
+}
+
+def ensure_dir(p):
+    os.makedirs(p, exist_ok=True)
+    return p
+
+def safe_mwu(x, y):
+    x = np.asarray(x, float); y = np.asarray(y, float)
+    x = x[~np.isnan(x)]; y = y[~np.isnan(y)]
+    if len(x) < 2 or len(y) < 2:
+        return np.nan
+    if np.all(x == x[0]) and np.all(y == y[0]) and x[0] == y[0]:
+        return 1.0
+    try:
+        return mannwhitneyu(x, y, alternative="two-sided").pvalue
+    except Exception:
+        return np.nan
+
+def safe_ttest(x, y):
+    x = np.asarray(x, float); y = np.asarray(y, float)
+    x = x[~np.isnan(x)]; y = y[~np.isnan(y)]
+    if len(x) < 2 or len(y) < 2:
+        return np.nan
+    if np.all(x == x[0]) and np.all(y == y[0]) and x[0] == y[0]:
+        return 1.0
+    try:
+        return ttest_ind(x, y, equal_var=False, nan_policy="omit").pvalue
+    except Exception:
+        return np.nan
+
+def _norm(s):
+    s = str(s).strip().lower()
+    for ch in ["_", "-", ".", "(", ")", "[", "]", "/"]:
+        s = s.replace(ch, " ")
+    s = " ".join(s.split())
+    s = s.replace("type i i", "type ii")
+    return s
+
+def map_to_myogenic_4(ct_label):
+    s = _norm(ct_label)
+
+    # MuSC / satellite
+    if ("musc" in s) or ("muscle stem" in s) or ("satellite" in s):
+        return "MuSC"
+
+    # Type II
+    if ("type ii" in s) or ("type 2" in s) or ("type2" in s) or ("fast" in s and "fiber" in s):
+        return "Type II"
+
+    # Type I
+    if ("type i" in s) or ("type 1" in s) or ("type1" in s) or ("slow" in s and "fiber" in s):
+        return "Type I"
+
+    # Specialized MF
+    if ("specialized" in s and ("mf" in s or "myofiber" in s or "myofibre" in s)) or ("specialized mf" in s):
+        return "Specialized MF"
+
+    return None
+
+def build_age_group_v2_from_age_bi(obs, age_col, bi_col, young_max=46, old_min=74):
+    age = pd.to_numeric(obs[age_col], errors="coerce")
+    bi = pd.to_numeric(obs[bi_col], errors="coerce")
+
+    g = pd.Series(["other"] * obs.shape[0], index=obs.index, dtype=object)
+    g.loc[age <= young_max] = "young"
+
+    is_old = age >= old_min
+    g.loc[is_old & bi.notna() & (bi == 100)] = "old_BI100"
+    g.loc[is_old & bi.notna() & (bi < 100)] = "old_BIlt100"
+    # is_old but BI is NA stays "other"
+    return g
+
+def parse_donor_id_from_sample(sample_series):
+    sid = sample_series.astype(str)
+    donor = sid.str.split("_").str[0].str.lower()
+    return donor
+
+def make_pseudobulk_multi_gene_counts(counts_csr, gene_idx, donor_ids, myo_ct, groups):
+    """
+    counts_csr: (n_cells x n_genes_all) csr
+    gene_idx: indices of target genes in adata.var_names
+    donor_ids: (n_cells,) array-like
+    myo_ct: (n_cells,) array-like, already mapped to MYOGENIC_4 (None filtered out)
+    groups: (n_cells,) array-like, in {'young','old_BI100','old_BIlt100'} (filtered out 'other')
+
+    Return:
+      pb_df: per (donor, celltype) with lib_sum, n_cells, group
+      gene_sums_df: per (donor, celltype) gene sums as wide df
+    """
+    n = len(donor_ids)
+    if counts_csr.shape[0] != n:
+        raise ValueError("counts rows and obs length mismatch")
+
+    # subset matrix to target genes
+    Xg = counts_csr[:, gene_idx]  # (n_cells x n_genes_target), csr
+
+    # lib size per cell (all genes)
+    lib = np.asarray(counts_csr.sum(axis=1)).ravel().astype(float)
+
+    # define pair key: donor||celltype
+    pair = pd.Series(donor_ids, dtype=str) + "||" + pd.Series(myo_ct, dtype=str)
+    pair_codes, pair_uniques = pd.factorize(pair, sort=True)
+    n_pairs = len(pair_uniques)
+
+    # build indicator matrix S (n_cells x n_pairs)
+    row_idx = np.arange(n, dtype=int)
+    col_idx = pair_codes.astype(int)
+    data = np.ones(n, dtype=np.float32)
+    S = sparse.csr_matrix((data, (row_idx, col_idx)), shape=(n, n_pairs))
+
+    # sums per pair
+    gene_sums = (S.T @ Xg)  # (n_pairs x n_genes_target)
+    lib_sums = np.asarray(S.T @ lib).ravel()
+    n_cells = np.asarray(S.T @ np.ones(n, dtype=np.float32)).ravel()
+
+    # decode donor, celltype from pair_uniques
+    donor_list = []
+    ct_list = []
+    for p in pair_uniques:
+        d, ct = p.split("||", 1)
+        donor_list.append(d)
+        ct_list.append(ct)
+
+    pb_df = pd.DataFrame({
+        "donor_id": donor_list,
+        "celltype": ct_list,
+        "lib_sum": lib_sums.astype(float),
+        "n_cells": n_cells.astype(int),
+    })
+
+    # attach group per donor, check consistency
+    tmp = pd.DataFrame({"donor_id": donor_ids, "group": groups})
+    donor_group = tmp.groupby("donor_id")["group"].agg(lambda x: x.iloc[0])
+    pb_df["group"] = pb_df["donor_id"].map(donor_group.to_dict())
+
+    # gene sums wide
+    gene_sums_arr = gene_sums.toarray() if sparse.issparse(gene_sums) else np.asarray(gene_sums)
+    gene_sums_df = pd.DataFrame(gene_sums_arr, columns=None)
+    return pb_df, gene_sums_df
+
+def compute_long_table_from_pb(pb_df, gene_sums_df, genes_present, eps_cpm=0.1):
+    """
+    Build long table:
+    donor_id, celltype, group, n_cells, lib_sum, gene, cpm, log1p_cpm, expr_linear, expr_log_for_stats
+    """
+    # CPM per pair x gene
+    lib = pb_df["lib_sum"].to_numpy(dtype=float)
+    lib_ok = lib > 0
+    cpm = np.full((pb_df.shape[0], len(genes_present)), np.nan, dtype=float)
+    cpm[lib_ok, :] = (gene_sums_df.to_numpy(dtype=float)[lib_ok, :] / lib[lib_ok, None]) * 1e6
+    log1p_cpm = np.log1p(np.clip(cpm, a_min=0, a_max=None))
+
+    rows = []
+    for gi, g in enumerate(genes_present):
+        sub = pb_df.copy()
+        sub["gene"] = g
+        sub["cpm"] = cpm[:, gi]
+        sub["log1p_cpm"] = log1p_cpm[:, gi]
+        sub["expr_linear"] = sub["cpm"].fillna(0.0) + float(eps_cpm)
+        sub["expr_log_for_stats"] = sub["log1p_cpm"]
+        rows.append(sub)
+
+    df_long = pd.concat(rows, axis=0, ignore_index=True)
+    return df_long
+
+def compute_dot_mats(df_long, baseline="young", comps=("old_BI100", "old_BIlt100"), min_donors_per_pixel=3, test="mwu"):
+    """
+    Return:
+      genes_order, celltypes_order,
+      log2fc_mat[comp], pval_mat[comp], cov_table
+    """
+    genes_order = [g for g in COQ10_GENES if g in df_long["gene"].unique()]
+    celltypes_order = [c for c in MYOGENIC_4 if c in df_long["celltype"].unique()]
+
+    cov = (df_long.groupby(["gene", "celltype", "group"])["donor_id"].nunique().reset_index().rename(columns={"donor_id": "n_donors"}))
+
+    # group mean on linear scale
+    mean_lin = (df_long.groupby(["gene", "celltype", "group"])["expr_linear"].mean().reset_index().rename(columns={"expr_linear": "mean_expr_linear"}))
+    def mat_mean(group_name):
+        sub = mean_lin[mean_lin["group"] == group_name]
+        return sub.pivot(index="gene", columns="celltype", values="mean_expr_linear").reindex(index=genes_order, columns=celltypes_order)
+
+    base_mean = mat_mean(baseline)
+
+    log2fc_mat = {}
+    pval_mat = {}
+
+    for comp in comps:
+        comp_mean = mat_mean(comp)
+        log2fc = np.log2(comp_mean / base_mean)
+        log2fc_mat[comp] = log2fc
+
+        P = pd.DataFrame(index=genes_order, columns=celltypes_order, dtype=float)
+        for gene in genes_order:
+            for ct in celltypes_order:
+                x = df_long[(df_long["gene"] == gene) & (df_long["celltype"] == ct) & (df_long["group"] == baseline)]["expr_log_for_stats"].to_numpy()
+                y = df_long[(df_long["gene"] == gene) & (df_long["celltype"] == ct) & (df_long["group"] == comp)]["expr_log_for_stats"].to_numpy()
+
+                nx = df_long[(df_long["gene"] == gene) & (df_long["celltype"] == ct) & (df_long["group"] == baseline)]["donor_id"].nunique()
+                ny = df_long[(df_long["gene"] == gene) & (df_long["celltype"] == ct) & (df_long["group"] == comp)]["donor_id"].nunique()
+
+                if (nx < min_donors_per_pixel) or (ny < min_donors_per_pixel):
+                    p = np.nan
+                else:
+                    if test.lower() == "ttest":
+                        p = safe_ttest(y, x)
+                    else:
+                        p = safe_mwu(y, x)
+                P.loc[gene, ct] = p
+        pval_mat[comp] = P
+
+    return genes_order, celltypes_order, log2fc_mat, pval_mat, cov
+
+def _p_to_stars(p):
+    if not np.isfinite(p):
+        return ""
+    if p < 0.001:
+        return "***"
+    if p < 0.01:
+        return "**"
+    if p < 0.05:
+        return "*"
+    return ""
+
+def plot_dotplot(log2fc_mat, pval_mat, genes, celltypes, out_png,
+                 comps=("old_BI100", "old_BIlt100"),
+                 comp_labels=("Healthy", "Frail"),
+                 cmap="RdBu_r",
+                 size_min=25,
+                 size_scale=55,
+                 p_clip_min=1e-6,
+                 v_clip=3.0):
+    """
+    x: two columns per celltype, left=comp1, right=comp2
+    size: -ln(p), clipped
+    star: drawn inside dot if p<0.05
+    """
+    # build long for plotting
+    rows = []
+    for comp in comps:
+        L = log2fc_mat[comp].reindex(index=genes, columns=celltypes)
+        P = pval_mat[comp].reindex(index=genes, columns=celltypes)
+        for g in genes:
+            for ct in celltypes:
+                rows.append({
+                    "gene": g,
+                    "celltype": ct,
+                    "comp": comp,
+                    "log2fc": float(L.loc[g, ct]) if pd.notna(L.loc[g, ct]) else np.nan,
+                    "p": float(P.loc[g, ct]) if pd.notna(P.loc[g, ct]) else np.nan,
+                })
+    dfp = pd.DataFrame(rows)
+
+    # x positions
+    ct_to_i = {ct: i for i, ct in enumerate(celltypes)}
+    comp_to_off = {comps[0]: 0, comps[1]: 1}
+    dfp["x"] = dfp.apply(lambda r: ct_to_i[r["celltype"]] * 2 + comp_to_off[r["comp"]], axis=1)
+
+    # y positions (genes top to bottom)
+    gene_to_y = {g: i for i, g in enumerate(genes)}
+    dfp["y"] = dfp["gene"].map(gene_to_y)
+
+    # size from -ln(p)
+    p = dfp["p"].to_numpy(dtype=float)
+    p2 = np.clip(p, p_clip_min, 1.0)
+    neglnp = -np.log(p2)
+    neglnp[~np.isfinite(neglnp)] = np.nan
+    neglnp = np.clip(neglnp, 0.0, 20.0)  # keep within readable range
+    dfp["neglnp"] = neglnp
+
+    # size mapping with a visible minimum
+    s = size_min + size_scale * dfp["neglnp"].fillna(0.0).to_numpy(dtype=float)
+    dfp["size"] = s
+
+    # color norm
+    v = dfp["log2fc"].to_numpy(dtype=float)
+    v = np.clip(v, -v_clip, v_clip)
+    dfp["log2fc_clip"] = v
+    norm = TwoSlopeNorm(vmin=-v_clip, vcenter=0.0, vmax=v_clip)
+
+    # plot
+    fig_w = max(10.5, 1.1 * len(celltypes) * 2)
+    fig_h = max(6.5, 0.45 * len(genes) + 2.5)
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=200)
+
+    sca = ax.scatter(
+        dfp["x"].to_numpy(),
+        dfp["y"].to_numpy(),
+        c=dfp["log2fc_clip"].to_numpy(),
+        s=dfp["size"].to_numpy(),
+        cmap=cmap,
+        norm=norm,
+        linewidths=0.3,
+        edgecolors="black",
+        alpha=0.95
+    )
+
+    # stars inside dots
+    for _, r in dfp.iterrows():
+        pval = r["p"]
+        if np.isfinite(pval) and (pval < 0.05) and np.isfinite(r["log2fc"]):
+            ax.text(r["x"], r["y"], "*", ha="center", va="center", fontsize=9, fontweight="bold", color="black")
+
+    # y axis genes
+    ax.set_yticks(range(len(genes)))
+    ax.set_yticklabels(genes)
+    ax.invert_yaxis()
+
+    # bottom x: celltype at pair centers
+    centers = [i * 2 + 0.5 for i in range(len(celltypes))]
+    ax.set_xticks(centers)
+    ax.set_xticklabels(celltypes, rotation=0)
+    ax.set_xlabel("Myogenic cell types")
+
+    # top x: show H/F labels for each column
+    ax2 = ax.twiny()
+    ax2.set_xlim(ax.get_xlim())
+    top_ticks = []
+    top_labels = []
+    for i in range(len(celltypes)):
+        top_ticks.extend([i * 2 + 0, i * 2 + 1])
+        top_labels.extend([comp_labels[0], comp_labels[1]])
+    ax2.set_xticks(top_ticks)
+    ax2.set_xticklabels(top_labels, rotation=90, fontsize=9)
+    ax2.tick_params(axis="x", pad=2)
+    ax2.set_xlabel("Comparison columns (left vs right within each cell type)")
+
+    # grid to separate columns
+    for xline in range(0, len(celltypes) * 2 + 1):
+        ax.axvline(xline - 0.5, color="#e6e6e6", linewidth=0.8, zorder=0)
+    for yline in range(0, len(genes) + 1):
+        ax.axhline(yline - 0.5, color="#f0f0f0", linewidth=0.6, zorder=0)
+
+    # colorbar
+    cbar = fig.colorbar(sca, ax=ax, fraction=0.03, pad=0.02)
+    cbar.set_label("Log2FC vs young (group mean CPM ratio)")
+
+    # size legend outside (no overlap)
+    # pick representative -ln(p) levels
+    levels = [0.0, 1.0, 2.0, 3.0, 5.0]
+    handles = []
+    labels = []
+    for lv in levels:
+        handles.append(plt.Line2D([0], [0], marker="o", color="w",
+                                  markerfacecolor="gray", markeredgecolor="black",
+                                  markersize=np.sqrt(size_min + size_scale * lv)))
+        labels.append(f"-ln(p)={lv:g}")
+    ax.legend(handles, labels, title="Dot size", frameon=True,
+              loc="upper left", bbox_to_anchor=(1.02, 1.00), borderaxespad=0.0,
+              fontsize=9, title_fontsize=10)
+
+    ax.set_title("CoQ10 pathway, donor-level pseudobulk, myogenic only\n(dot color=log2FC, dot size=-ln(p), star: p<0.05)")
+    fig.tight_layout()
+    fig.savefig(out_png, dpi=300)
+    plt.close(fig)
+
+def draw_bracket_with_p(ax, x1, x2, y, h, p, fontsize=10):
+    ax.plot([x1, x1, x2, x2], [y, y + h, y + h, y], linewidth=1.2, color="black")
+    if np.isfinite(p):
+        star = _p_to_stars(p)
+        txt = f"p={p:.3g}"
+        if star != "":
+            txt = txt + f" {star}"
+    else:
+        txt = "p=NA"
+    ax.text((x1 + x2) / 2.0, y + h, txt, ha="center", va="bottom", fontsize=fontsize)
+
+def plot_coq8a_box_log10fc(df_long, out_png_with, out_png_clean,
+                          eps=0.1,
+                          group_order=("young", "old_BI100", "old_BIlt100"),
+                          celltypes=MYOGENIC_4,
+                          test="mwu"):
+    """
+    For each celltype, baseline = mean CPM of young donors.
+    For each donor: log10FC = log10((donor_cpm+eps)/(young_mean+eps)).
+    Then boxplot + jitter per group, with p-value brackets vs young.
+    """
+    df = df_long[df_long["gene"] == "COQ8A"].copy()
+    if df.empty:
+        print("[WARN] COQ8A not present in df_long, skip boxplot.", file=sys.stderr)
+        return
+
+    df = df[df["celltype"].isin(celltypes)].copy()
+    df = df[df["group"].isin(group_order)].copy()
+
+    # donor-level CPM for COQ8A is in df["cpm"] if counts path, but we always build expr_linear from CPM+eps
+    # Here, reconstruct CPM = expr_linear - eps
+    df["cpm_raw"] = df["expr_linear"].astype(float) - float(eps)
+    df.loc[df["cpm_raw"] < 0, "cpm_raw"] = 0.0
+
+    # baseline per celltype (young mean CPM)
+    base = (df[df["group"] == "young"].groupby("celltype")["cpm_raw"].mean()).to_dict()
+
+    def calc_log10fc(row):
+        b = base.get(row["celltype"], np.nan)
+        if not np.isfinite(b):
+            return np.nan
+        return np.log10((row["cpm_raw"] + eps) / (b + eps))
+
+    df["log10fc"] = df.apply(calc_log10fc, axis=1)
+
+    # plot
+    celltypes_plot = [ct for ct in celltypes if ct in df["celltype"].unique()]
+    groups_plot = [g for g in group_order if g in df["group"].unique()]
+
+    fig, ax = plt.subplots(figsize=(10.5, 5.8), dpi=200)
+    ax.axhline(0.0, linestyle="--", linewidth=1.0, color="black", alpha=0.6)
+
+    base_pos = np.arange(len(celltypes_plot), dtype=float)
+    n_groups = len(groups_plot)
+    width = 0.22 if n_groups >= 3 else 0.28
+    offsets = np.linspace(-(n_groups - 1) / 2, (n_groups - 1) / 2, n_groups) * width
+    rng = np.random.default_rng(0)
+
+    # collect max for bracket y
+    y_max_per_ct = {}
+
+    for gi, g in enumerate(groups_plot):
+        pos = base_pos + offsets[gi]
+        data_list = []
+        for ct in celltypes_plot:
+            vals = df[(df["group"] == g) & (df["celltype"] == ct)]["log10fc"].to_numpy(dtype=float)
+            vals = vals[np.isfinite(vals)]
+            data_list.append(vals)
+
+        bp = ax.boxplot(
+            data_list,
+            positions=pos,
+            widths=width * 0.9,
+            patch_artist=True,
+            showfliers=False,
+            medianprops=dict(color="black", linewidth=1.0),
+            boxprops=dict(linewidth=1.0),
+            whiskerprops=dict(linewidth=1.0),
+            capprops=dict(linewidth=1.0),
+        )
+        for patch in bp["boxes"]:
+            patch.set_facecolor(COLORS.get(g, "#1f77b4"))
+            patch.set_alpha(0.35)
+
+        for pi, (ct, vals) in enumerate(zip(celltypes_plot, data_list)):
+            if len(vals) == 0:
+                continue
+            jitter = rng.normal(loc=0.0, scale=width * 0.10, size=len(vals))
+            ax.scatter(np.full(len(vals), pos[pi]) + jitter, vals,
+                       s=30, color=COLORS.get(g, "#1f77b4"),
+                       alpha=0.9, edgecolors="none")
+            curmax = np.nanmax(vals)
+            y_max_per_ct[ct] = max(y_max_per_ct.get(ct, -np.inf), curmax)
+
+    ax.set_xticks(base_pos)
+    ax.set_xticklabels(celltypes_plot)
+    ax.set_ylabel("COQ8A log10FC vs young-mean baseline (per cell type)")
+    ax.set_title("COQ8A donor-level log10FC (each dot = one donor)")
+
+    # stats: young vs old_BI100, young vs old_BIlt100, per celltype
+    p_rows = []
+    for ct_i, ct in enumerate(celltypes_plot):
+        vals_y = df[(df["celltype"] == ct) & (df["group"] == "young")]["log10fc"].to_numpy(dtype=float)
+        vals_h = df[(df["celltype"] == ct) & (df["group"] == "old_BI100")]["log10fc"].to_numpy(dtype=float)
+        vals_f = df[(df["celltype"] == ct) & (df["group"] == "old_BIlt100")]["log10fc"].to_numpy(dtype=float)
+
+        vals_y = vals_y[np.isfinite(vals_y)]
+        vals_h = vals_h[np.isfinite(vals_h)]
+        vals_f = vals_f[np.isfinite(vals_f)]
+
+        if test.lower() == "ttest":
+            p_h = safe_ttest(vals_h, vals_y)
+            p_f = safe_ttest(vals_f, vals_y)
+        else:
+            p_h = safe_mwu(vals_h, vals_y)
+            p_f = safe_mwu(vals_f, vals_y)
+
+        p_rows.append({"celltype": ct, "p_y_vs_oldBI100": p_h, "p_y_vs_oldBIlt100": p_f})
+
+        # bracket positions
+        # x positions for the group boxes at this celltype
+        x_y = base_pos[ct_i] + offsets[groups_plot.index("young")] if "young" in groups_plot else base_pos[ct_i]
+        if "old_BI100" in groups_plot:
+            x_h = base_pos[ct_i] + offsets[groups_plot.index("old_BI100")]
+        else:
+            x_h = None
+        if "old_BIlt100" in groups_plot:
+            x_f = base_pos[ct_i] + offsets[groups_plot.index("old_BIlt100")]
+        else:
+            x_f = None
+
+        y0 = y_max_per_ct.get(ct, 0.0)
+        if not np.isfinite(y0):
+            y0 = 0.0
+        # add some headroom
+        y0 = y0 + 0.12
+        h = 0.06
+
+        if x_h is not None:
+            draw_bracket_with_p(ax, x_y, x_h, y0, h, p_h, fontsize=9)
+            y0 += 0.14
+        if x_f is not None:
+            draw_bracket_with_p(ax, x_y, x_f, y0, h, p_f, fontsize=9)
+
+    # legend
+    handles = []
+    labels = []
+    for g in groups_plot:
+        hnd = plt.Line2D([0], [0], marker="o", color="w", markerfacecolor=COLORS.get(g, "#1f77b4"),
+                         markeredgecolor="none", markersize=8)
+        handles.append(hnd); labels.append(g)
+    ax.legend(handles, labels, frameon=False, loc="best")
+
+    fig.tight_layout()
+    fig.savefig(out_png_with, dpi=300)
+
+    # clean version: remove bracket texts/lines by replotting without stats
+    plt.close(fig)
+
+    # clean figure
+    fig2, ax2 = plt.subplots(figsize=(10.5, 5.8), dpi=200)
+    ax2.axhline(0.0, linestyle="--", linewidth=1.0, color="black", alpha=0.6)
+
+    for gi, g in enumerate(groups_plot):
+        pos = base_pos + offsets[gi]
+        data_list = []
+        for ct in celltypes_plot:
+            vals = df[(df["group"] == g) & (df["celltype"] == ct)]["log10fc"].to_numpy(dtype=float)
+            vals = vals[np.isfinite(vals)]
+            data_list.append(vals)
+
+        bp = ax2.boxplot(
+            data_list,
+            positions=pos,
+            widths=width * 0.9,
+            patch_artist=True,
+            showfliers=False,
+            medianprops=dict(color="black", linewidth=1.0),
+            boxprops=dict(linewidth=1.0),
+            whiskerprops=dict(linewidth=1.0),
+            capprops=dict(linewidth=1.0),
+        )
+        for patch in bp["boxes"]:
+            patch.set_facecolor(COLORS.get(g, "#1f77b4"))
+            patch.set_alpha(0.35)
+
+        for pi, (ct, vals) in enumerate(zip(celltypes_plot, data_list)):
+            if len(vals) == 0:
+                continue
+            jitter = rng.normal(loc=0.0, scale=width * 0.10, size=len(vals))
+            ax2.scatter(np.full(len(vals), pos[pi]) + jitter, vals,
+                        s=30, color=COLORS.get(g, "#1f77b4"),
+                        alpha=0.9, edgecolors="none")
+
+    ax2.set_xticks(base_pos)
+    ax2.set_xticklabels(celltypes_plot)
+    ax2.set_ylabel("COQ8A log10FC vs young-mean baseline (per cell type)")
+    ax2.set_title("COQ8A donor-level log10FC (each dot = one donor)")
+
+    handles2 = []
+    labels2 = []
+    for g in groups_plot:
+        hnd = plt.Line2D([0], [0], marker="o", color="w", markerfacecolor=COLORS.get(g, "#1f77b4"),
+                         markeredgecolor="none", markersize=8)
+        handles2.append(hnd); labels2.append(g)
+    ax2.legend(handles2, labels2, frameon=False, loc="best")
+
+    fig2.tight_layout()
+    fig2.savefig(out_png_clean, dpi=300)
+    plt.close(fig2)
+
+    p_df = pd.DataFrame(p_rows)
+    return df, p_df
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--in_h5ad", required=True)
+    ap.add_argument("--out_dir", required=True)
+    ap.add_argument("--label_key", required=True)
+    ap.add_argument("--sample_key", default="sample_id")
+    ap.add_argument("--donor_key", default="", help="If provided and exists in obs, use this donor id column; else parse from sample_key")
+    ap.add_argument("--group_key", default="age_group_v2")
+    ap.add_argument("--age_col", default="Age")
+    ap.add_argument("--bi_col", default="Barthel_Index_BI")
+    ap.add_argument("--young_max", type=float, default=46.0)
+    ap.add_argument("--old_min", type=float, default=74.0)
+    ap.add_argument("--eps_cpm", type=float, default=0.1)
+    ap.add_argument("--test", choices=["mwu", "ttest"], default="mwu")
+    ap.add_argument("--min_donors_per_pixel", type=int, default=3)
+    args = ap.parse_args()
+
+    out_dir = ensure_dir(args.out_dir)
+    fig_dir = ensure_dir(os.path.join(out_dir, "figs"))
+    tab_dir = ensure_dir(os.path.join(out_dir, "tables"))
+    dbg_dir = ensure_dir(os.path.join(out_dir, "debug"))
+
+    print("[READ]", args.in_h5ad)
+    ad = sc.read_h5ad(args.in_h5ad)
+
+    if args.label_key not in ad.obs.columns:
+        raise KeyError(f"label_key not found: {args.label_key}")
+    if args.sample_key not in ad.obs.columns:
+        raise KeyError(f"sample_key not found: {args.sample_key}")
+    if "counts" not in ad.layers:
+        raise KeyError("adata.layers['counts'] not found. This step6j requires raw counts in layers['counts'].")
+
+    # donor id
+    if args.donor_key and (args.donor_key in ad.obs.columns):
+        donor_id = ad.obs[args.donor_key].astype(str).str.lower()
+        donor_source = args.donor_key
+    else:
+        donor_id = parse_donor_id_from_sample(ad.obs[args.sample_key])
+        donor_source = f"parsed_from_{args.sample_key}"
+    ad.obs["_donor_id"] = donor_id
+
+    # group key
+    if args.group_key in ad.obs.columns:
+        gvals = ad.obs[args.group_key].astype(str)
+        need_build = not (("old_BI100" in gvals.unique()) and ("old_BIlt100" in gvals.unique()) and ("young" in gvals.unique()))
+        if need_build:
+            print(f"[INFO] group_key '{args.group_key}' exists but not BI-split. Rebuild age_group_v2 from Age+BI.")
+            if args.age_col not in ad.obs.columns:
+                raise KeyError(f"Age column not found: {args.age_col}")
+            if args.bi_col not in ad.obs.columns:
+                raise KeyError(f"BI column not found: {args.bi_col}")
+            ad.obs[args.group_key] = build_age_group_v2_from_age_bi(ad.obs, args.age_col, args.bi_col, args.young_max, args.old_min)
+        else:
+            print(f"[INFO] Using existing group column: {args.group_key}")
+    else:
+        print(f"[INFO] group_key '{args.group_key}' missing. Build from Age+BI.")
+        if args.age_col not in ad.obs.columns:
+            raise KeyError(f"Age column not found: {args.age_col}")
+        if args.bi_col not in ad.obs.columns:
+            raise KeyError(f"BI column not found: {args.bi_col}")
+        ad.obs[args.group_key] = build_age_group_v2_from_age_bi(ad.obs, args.age_col, args.bi_col, args.young_max, args.old_min)
+
+    # myogenic mapping
+    ct_raw = ad.obs[args.label_key].astype(str)
+    ct_mapped = ct_raw.map(map_to_myogenic_4)
+    ad.obs["_myogenic4"] = ct_mapped
+
+    # keep only myogenic and valid groups
+    g = ad.obs[args.group_key].astype(str)
+    keep_group = g.isin(["young", "old_BI100", "old_BIlt100"])
+    keep_myo = ad.obs["_myogenic4"].notna()
+    keep = keep_group & keep_myo
+
+    # debug counts
+    print("[INFO] donor id source:", donor_source)
+    print("[INFO] group_v2 counts (cell-level):")
+    print(ad.obs[args.group_key].astype(str).value_counts(dropna=False))
+    print("[INFO] n_obs total:", ad.n_obs)
+    print("[INFO] keep myogenic n:", int(keep_myo.sum()))
+    print("[INFO] keep group n:", int(keep_group.sum()))
+    print("[INFO] keep mask n:", int(keep.sum()))
+    print("[INFO] group counts after filter:")
+    print(ad.obs.loc[keep, args.group_key].astype(str).value_counts())
+
+    # write debug columns snapshot
+    dbg_cols = ["_donor_id", args.sample_key, args.label_key, "_myogenic4", args.group_key]
+    dbg_df = ad.obs[dbg_cols].copy()
+    dbg_df.to_csv(os.path.join(dbg_dir, "debug_obs_subset.tsv"), sep="\t", index=True)
+    print("[WRITE] debug:", dbg_dir)
+
+    # subset
+    ad2 = ad[keep].copy()
+
+    # counts csr
+    X = ad2.layers["counts"]
+    if not sparse.issparse(X):
+        X = sparse.csr_matrix(X)
+    else:
+        X = X.tocsr()
+
+    # genes present
+    genes_present = [gg for gg in COQ10_GENES if gg in ad2.var_names]
+    missing = [gg for gg in COQ10_GENES if gg not in ad2.var_names]
+    if len(missing) > 0:
+        print("[WARN] Missing genes:", missing, file=sys.stderr)
+    if len(genes_present) == 0:
+        raise KeyError("No CoQ10 genes found in adata.var_names.")
+
+    gene_idx = np.array([np.where(ad2.var_names == gg)[0][0] for gg in genes_present], dtype=int)
+
+    # make pseudobulk (no min_cells threshold)
+    donor_ids = ad2.obs["_donor_id"].to_numpy(dtype=str)
+    myo_ct = ad2.obs["_myogenic4"].to_numpy(dtype=str)
+    groups = ad2.obs[args.group_key].astype(str).to_numpy(dtype=str)
+
+    pb_df, gene_sums_df = make_pseudobulk_multi_gene_counts(
+        counts_csr=X,
+        gene_idx=gene_idx,
+        donor_ids=donor_ids,
+        myo_ct=myo_ct,
+        groups=groups
+    )
+
+    # compute long table
+    df_long = compute_long_table_from_pb(pb_df, gene_sums_df, genes_present, eps_cpm=args.eps_cpm)
+
+    # save tables
+    out_long = os.path.join(tab_dir, "step6j_myogenic_pseudobulk_long.tsv")
+    df_long.to_csv(out_long, sep="\t", index=False)
+    print("[WRITE]", out_long)
+
+    # dot mats
+    genes_order, celltypes_order, log2fc_mat, pval_mat, cov = compute_dot_mats(
+        df_long,
+        baseline="young",
+        comps=("old_BI100", "old_BIlt100"),
+        min_donors_per_pixel=args.min_donors_per_pixel,
+        test=args.test
+    )
+
+    cov_path = os.path.join(tab_dir, "step6j_myogenic_coverage.tsv")
+    cov.to_csv(cov_path, sep="\t", index=False)
+    print("[WRITE]", cov_path)
+
+    # dot plot
+    dot_png = os.path.join(fig_dir, "step6j_myogenic_coq10_dotplot.png")
+    plot_dotplot(
+        log2fc_mat=log2fc_mat,
+        pval_mat=pval_mat,
+        genes=genes_order,
+        celltypes=celltypes_order,
+        out_png=dot_png,
+        comps=("old_BI100", "old_BIlt100"),
+        comp_labels=("Healthy", "Frail"),
+        cmap="RdBu_r",
+        size_min=28,
+        size_scale=55,
+        p_clip_min=1e-6,
+        v_clip=3.0
+    )
+    print("[WRITE]", dot_png)
+
+    # COQ8A boxplot (log10FC)
+    box_with = os.path.join(fig_dir, "step6j_myogenic_COQ8A_boxplot_log10fc_with_pvals.png")
+    box_clean = os.path.join(fig_dir, "step6j_myogenic_COQ8A_boxplot_log10fc_clean.png")
+
+    df_coq8a, p_df = plot_coq8a_box_log10fc(
+        df_long=df_long,
+        out_png_with=box_with,
+        out_png_clean=box_clean,
+        eps=args.eps_cpm,
+        group_order=("young", "old_BI100", "old_BIlt100"),
+        celltypes=MYOGENIC_4,
+        test=args.test
+    )
+    print("[WRITE]", box_with)
+    print("[WRITE]", box_clean)
+
+    if p_df is not None:
+        p_path = os.path.join(tab_dir, "step6j_myogenic_COQ8A_pvals.tsv")
+        p_df.to_csv(p_path, sep="\t", index=False)
+        print("[WRITE]", p_path)
+
+    # quick sanity: show whether Type II exists in df_long for COQ8A
+    chk = df_long[(df_long["gene"] == "COQ8A") & (df_long["celltype"] == "Type II")]
+    print("[INFO] COQ8A Type II donors (after filter):", chk["donor_id"].nunique())
+
+    print("[DONE]")
+    print("  figs  :", fig_dir)
+    print("  tables:", tab_dir)
+    print("  debug :", dbg_dir)
+
+if __name__ == "__main__":
+    main()
