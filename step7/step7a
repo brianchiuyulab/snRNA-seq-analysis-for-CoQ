@@ -1,1 +1,11 @@
+# Step7: run COMPASS
+cd ~/compass_run_myogenic
+conda activate py_compass
+
+compass --data "tables/expression_matrix_log1pCPM.tsv" \
+  --species homo_sapiens \
+  --num-processes 4 \
+  --output-dir "run_full/out" \
+  --temp-dir "run_full/tmp" \
+  2>&1 | tee "run_full/logs/compass_full_np4.log"
 
