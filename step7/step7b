@@ -1,1 +1,187 @@
+#!/usr/bin/env python3
+import gzip
+import numpy as np
+import pandas as pd
+from pathlib import Path
+import argparse
 
+
+def build_groups(meta: pd.DataFrame, keys):
+    """
+    Return dict: key_tuple -> (cols_list, weights_array, key_values_dict)
+    """
+    groups = {}
+    for k, sub in meta.groupby(keys, dropna=False):
+        k_tuple = k if isinstance(k, tuple) else (k,)
+        cols = sub["micropool_id"].astype(str).tolist()
+        w = sub["n_cells"].to_numpy(dtype=float)
+        key_vals = dict(zip(keys, k_tuple))
+        groups[k_tuple] = (cols, w, key_vals)
+    return groups
+
+
+def write_gz_header(fp: Path, header_cols):
+    fp.parent.mkdir(parents=True, exist_ok=True)
+    fh = gzip.open(fp, "wt")
+    fh.write("\t".join(header_cols) + "\n")
+    return fh
+
+
+def append_rows_gz(fh, df: pd.DataFrame):
+    df.to_csv(fh, sep="\t", index=False, header=False, na_rep="NA")
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Step7b: COMPASS postprocess (merge micropool metadata + donor aggregation) without building huge long table."
+    )
+    ap.add_argument("--base", default=".", help="Project root (default: current dir, i.e., compass_run_myogenic)")
+    ap.add_argument("--reactions", default="run_full/out/reactions.tsv", help="Path to reactions.tsv (relative to base)")
+    ap.add_argument("--meta", default="tables/micropool_metadata.tsv", help="Path to micropool_metadata.tsv (relative to base)")
+    ap.add_argument("--outdir", default="run_full/out/step7b_postproc", help="Output dir (relative to base)")
+    ap.add_argument("--chunksize", type=int, default=200, help="Rows per chunk when reading reactions.tsv")
+    args = ap.parse_args()
+
+    base = Path(args.base).resolve()
+    reactions_fp = (base / args.reactions).resolve()
+    meta_fp = (base / args.meta).resolve()
+    out_dir = (base / args.outdir).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    out_donor = out_dir / "compass_reactions_donor_aggregated.tsv.gz"
+    out_donor_ct = out_dir / "compass_reactions_donor_celltype_aggregated.tsv.gz"
+    manifest = out_dir / "step7b_manifest.txt"
+
+    # load metadata
+    meta = pd.read_csv(meta_fp, sep="\t")
+    need_cols = {"micropool_id", "donor", "celltype", "group", "n_cells"}
+    miss = need_cols - set(meta.columns)
+    if miss:
+        raise ValueError(f"micropool_metadata.tsv missing columns: {sorted(miss)}")
+
+    meta["micropool_id"] = meta["micropool_id"].astype(str)
+    meta["n_cells"] = pd.to_numeric(meta["n_cells"], errors="coerce").fillna(0)
+
+    # read header to validate micropool columns
+    with open(reactions_fp, "r") as f:
+        header = f.readline().rstrip("\n").split("\t")
+    if len(header) < 2:
+        raise ValueError("reactions.tsv header looks wrong (need reaction_id + micropool columns).")
+
+    reaction_col = header[0]
+    micropool_cols = header[1:]
+    meta_ids = set(meta["micropool_id"].tolist())
+    missing_in_meta = [c for c in micropool_cols if c not in meta_ids]
+    if missing_in_meta:
+        raise ValueError(
+            "reactions.tsv has micropool columns not found in metadata (first 10): "
+            + ", ".join(missing_in_meta[:10])
+        )
+
+    # precompute grouping -> column lists / weights
+    grp_donor = build_groups(meta, keys=["donor", "group"])
+    grp_donor_ct = build_groups(meta, keys=["donor", "group", "celltype"])
+
+    # precompute micropool column index lookup (important for speed)
+    col_index = {c: i for i, c in enumerate(micropool_cols)}
+
+    # open gzip writers
+    fh_donor = write_gz_header(out_donor, ["donor", "group", "reaction_id", "score_mean", "score_wmean"])
+    fh_donor_ct = write_gz_header(out_donor_ct, ["donor", "group", "celltype", "reaction_id", "score_mean", "score_wmean"])
+
+    reader = pd.read_csv(reactions_fp, sep="\t", chunksize=args.chunksize)
+    total_rxn = 0
+
+    for chunk_i, chunk in enumerate(reader, start=1):
+        # normalize reaction_id column name
+        if reaction_col in chunk.columns:
+            chunk = chunk.rename(columns={reaction_col: "reaction_id"})
+        else:
+            chunk = chunk.rename(columns={chunk.columns[0]: "reaction_id"})
+
+        # ensure we only keep expected columns in correct order
+        chunk = chunk[["reaction_id"] + micropool_cols]
+
+        # numeric matrix for micropools
+        X = chunk[micropool_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=float)
+        rids = chunk["reaction_id"].astype(str).to_numpy()
+        n_rxn = len(rids)
+        total_rxn += n_rxn
+
+        # donor-level aggregation
+        out_rows = []
+        for _, (cols, w, key_vals) in grp_donor.items():
+            idx = [col_index[c] for c in cols]
+            sub = X[:, idx]
+
+            mean = np.nanmean(sub, axis=1)
+            wsum = np.nansum(w)
+            if wsum > 0:
+                wmean = np.nansum(sub * w.reshape(1, -1), axis=1) / wsum
+            else:
+                wmean = np.full(n_rxn, np.nan)
+
+            out_rows.append(pd.DataFrame({
+                "donor": key_vals["donor"],
+                "group": key_vals["group"],
+                "reaction_id": rids,
+                "score_mean": mean,
+                "score_wmean": wmean
+            }))
+        out_d = pd.concat(out_rows, ignore_index=True)
+        append_rows_gz(fh_donor, out_d)
+
+        # donor + celltype aggregation
+        out_rows = []
+        for _, (cols, w, key_vals) in grp_donor_ct.items():
+            idx = [col_index[c] for c in cols]
+            sub = X[:, idx]
+
+            mean = np.nanmean(sub, axis=1)
+            wsum = np.nansum(w)
+            if wsum > 0:
+                wmean = np.nansum(sub * w.reshape(1, -1), axis=1) / wsum
+            else:
+                wmean = np.full(n_rxn, np.nan)
+
+            out_rows.append(pd.DataFrame({
+                "donor": key_vals["donor"],
+                "group": key_vals["group"],
+                "celltype": key_vals["celltype"],
+                "reaction_id": rids,
+                "score_mean": mean,
+                "score_wmean": wmean
+            }))
+        out_ct = pd.concat(out_rows, ignore_index=True)
+        append_rows_gz(fh_donor_ct, out_ct)
+
+        if chunk_i % 10 == 0:
+            print(f"[step7b] processed chunks: {chunk_i}, reactions so far: {total_rxn}")
+
+    fh_donor.close()
+    fh_donor_ct.close()
+
+    # write manifest for reproducibility
+    with open(manifest, "w") as f:
+        f.write("step7b COMPASS postprocess manifest\n")
+        f.write(f"base: {base}\n")
+        f.write(f"reactions.tsv: {reactions_fp}\n")
+        f.write(f"micropool_metadata.tsv: {meta_fp}\n")
+        f.write(f"output_dir: {out_dir}\n")
+        f.write(f"chunksize: {args.chunksize}\n")
+        f.write(f"n_micropools(metadata): {meta.shape[0]}\n")
+        f.write(f"n_micropool_columns(reactions header): {len(micropool_cols)}\n")
+        f.write(f"donor_groups: {len(grp_donor)}\n")
+        f.write(f"donor_celltype_groups: {len(grp_donor_ct)}\n")
+        f.write(f"total_reactions_processed: {total_rxn}\n")
+        f.write(f"out_donor: {out_donor}\n")
+        f.write(f"out_donor_celltype: {out_donor_ct}\n")
+
+    print("[step7b] DONE")
+    print("Saved:", out_donor)
+    print("Saved:", out_donor_ct)
+    print("Saved:", manifest)
+
+
+if __name__ == "__main__":
+    main()
