@@ -1,0 +1,277 @@
+#!/usr/bin/env python3
+from pathlib import Path
+import numpy as np
+import pandas as pd
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+# -------------------------
+# helpers
+# -------------------------
+def to_group2(x: str) -> str:
+    s = str(x).lower()
+    if s.startswith("young"):
+        return "young"
+    if s.startswith("old"):
+        return "old"
+    return "other"
+
+def detect_one(df, cands, what):
+    for c in cands:
+        if c in df.columns:
+            return c
+    raise SystemExit(f"Cannot find {what} column. Candidates tried: {cands}. Actual cols={list(df.columns)[:40]}...")
+
+def bh_fdr(p):
+    p = np.asarray(p, float)
+    n = p.size
+    order = np.argsort(p)
+    ranked = p[order]
+    q = ranked * n / (np.arange(n) + 1.0)
+    q = np.minimum.accumulate(q[::-1])[::-1]
+    out = np.empty_like(q)
+    out[order] = np.clip(q, 0, 1)
+    return out
+
+def cohens_d(x, y):
+    x = np.asarray(x, float); y = np.asarray(y, float)
+    x = x[np.isfinite(x)]; y = y[np.isfinite(y)]
+    nx, ny = len(x), len(y)
+    if nx < 2 or ny < 2:
+        return np.nan
+    vx = x.var(ddof=1); vy = y.var(ddof=1)
+    sp = np.sqrt(((nx-1)*vx + (ny-1)*vy) / (nx+ny-2))
+    if sp == 0:
+        return 0.0
+    return (x.mean() - y.mean()) / sp
+
+def mannwhitney_p(x, y):
+    # prefer scipy if available, else permutation fallback
+    x = np.asarray(x, float); y = np.asarray(y, float)
+    x = x[np.isfinite(x)]; y = y[np.isfinite(y)]
+    if len(x) == 0 or len(y) == 0:
+        return np.nan
+    try:
+        from scipy.stats import mannwhitneyu
+        return mannwhitneyu(x, y, alternative="two-sided").pvalue
+    except Exception:
+        # permutation on mean diff (ok for QC/use in plot)
+        rng = np.random.default_rng(0)
+        z = np.concatenate([x, y])
+        nx = len(x)
+        obs = x.mean() - y.mean()
+        B = 20000
+        cnt = 0
+        for _ in range(B):
+            rng.shuffle(z)
+            d = z[:nx].mean() - z[nx:].mean()
+            if abs(d) >= abs(obs):
+                cnt += 1
+        return (cnt + 1) / (B + 1)
+
+def beeswarm_offsets(x, step=0.085, bin_width=0.08, max_swarm=0.40):
+    x = np.asarray(x, float)
+    order = np.argsort(x)
+    yoff = np.zeros(len(x), float)
+    bins = {}
+    for idx in order:
+        b = int(np.round(x[idx] / bin_width))
+        bins.setdefault(b, []).append(idx)
+    for b, idxs in bins.items():
+        for k, idx in enumerate(idxs):
+            if k == 0:
+                yoff[idx] = 0.0
+            else:
+                layer = (k + 1) // 2
+                sign = 1 if (k % 2 == 1) else -1
+                yoff[idx] = sign * layer * step
+    return np.clip(yoff, -max_swarm, max_swarm)
+
+# -------------------------
+# paths
+# -------------------------
+base = Path.home() / "compass_run_myogenic"
+step8 = base / "Step8"
+step8.mkdir(exist_ok=True)
+
+donor_in = base / "coq10_young_old_export" / "donor_level_scaled.tsv"
+allow_in = base / "coq10_young_old_export" / "noETC_byStoich" / "summary_noETC_scaled_byAge.tsv"
+
+if not donor_in.exists():
+    raise SystemExit(f"Missing donor table: {donor_in}")
+if not allow_in.exists():
+    raise SystemExit(f"Missing noETC allow-list summary: {allow_in}")
+
+# -------------------------
+# load allow-list (rxn_id) and drop EX_
+# -------------------------
+allow = pd.read_csv(allow_in, sep="\t")
+if "Unnamed: 0" in allow.columns and "rxn_id" not in allow.columns:
+    allow = allow.rename(columns={"Unnamed: 0":"rxn_id"})
+rxn_id_col_allow = detect_one(allow, ["rxn_id"], "rxn_id (allow-list)")
+allow_rxn_ids = sorted(allow[rxn_id_col_allow].astype(str).unique())
+
+# base/sign parse
+def split_base_sign(rid: str):
+    rid = str(rid)
+    if rid.endswith("_pos"):
+        return rid[:-4], "pos"
+    if rid.endswith("_neg"):
+        return rid[:-4], "neg"
+    return rid, "na"
+
+allow_base = pd.DataFrame([split_base_sign(r) for r in allow_rxn_ids], columns=["rxn_base","sign"])
+allow_base["rxn_id"] = allow_rxn_ids
+
+# remove EX_ at base level
+noex_bases = sorted([b for b in allow_base["rxn_base"].unique() if not str(b).startswith("EX_")])
+allow_noex_ids = sorted(allow_base.loc[allow_base["rxn_base"].isin(noex_bases), "rxn_id"].astype(str).unique())
+
+# -------------------------
+# load donor table
+# -------------------------
+don = pd.read_csv(donor_in, sep="\t")
+
+donor_col = detect_one(don, ["donor","donor_id","Donor","subject"], "donor")
+group_col = detect_one(don, ["group","age_group","Group"], "group")
+cell_col  = detect_one(don, ["celltype","cell_type","Celltype"], "celltype")
+score_col = detect_one(don, ["score_donor","score","value"], "score")
+rxn_col   = None
+for c in ["rxn_id","reaction","Unnamed: 0"]:
+    if c in don.columns:
+        rxn_col = c
+        break
+if rxn_col is None:
+    raise SystemExit(f"Cannot find rxn_id column in donor table. cols={list(don.columns)[:40]}...")
+
+don[rxn_col] = don[rxn_col].astype(str)
+don["group2"] = don[group_col].map(to_group2)
+don = don[don["group2"].isin(["young","old"])].copy()
+
+# filter to allowed rxn_ids (noETC list), then remove EX_ by base
+don = don[don[rxn_col].isin(allow_noex_ids)].copy()
+if don.shape[0] == 0:
+    raise SystemExit("After filtering to noETC(noEX) rxn_ids, donor table is empty. Check inputs.")
+
+# parse base/sign for NET
+tmp = don[rxn_col].apply(split_base_sign)
+don["rxn_base"] = [t[0] for t in tmp]
+don["sign"]     = [t[1] for t in tmp]
+
+# NET per donor per base: mean(pos) - mean(neg)
+gcols = [donor_col, "group2", cell_col, "rxn_base", "sign"]
+agg = (don.groupby(gcols)[score_col].mean().reset_index())
+wide = (agg.pivot_table(index=[donor_col, "group2", cell_col, "rxn_base"],
+                        columns="sign", values=score_col, aggfunc="mean"))
+for s in ["pos","neg"]:
+    if s not in wide.columns:
+        wide[s] = 0.0
+wide = wide.reset_index()
+wide["net"] = wide["pos"].fillna(0.0) - wide["neg"].fillna(0.0)
+
+# -------------------------
+# summarize per celltype and rxn_base
+# -------------------------
+rows = []
+for (ct, rb), sub in wide.groupby([cell_col, "rxn_base"]):
+    x = sub.loc[sub["group2"]=="young", "net"].values
+    y = sub.loc[sub["group2"]=="old",   "net"].values
+    mean_y, mean_o = np.nanmean(x), np.nanmean(y)
+    delta = mean_y - mean_o
+    p = mannwhitney_p(x, y)
+    rows.append({
+        "celltype": ct,
+        "rxn_base": rb,
+        "n_donors_young": int(np.isfinite(x).sum()),
+        "n_donors_old": int(np.isfinite(y).sum()),
+        "mean_young": float(mean_y),
+        "mean_old": float(mean_o),
+        "delta_young_minus_old": float(delta),
+        "cohensD_young_minus_old": float(cohens_d(x, y)),
+        "p": float(p) if np.isfinite(p) else np.nan,
+    })
+
+out = pd.DataFrame(rows)
+out["q_bh"] = bh_fdr(out["p"].fillna(1.0).values)
+
+out["direction"] = np.where(out["delta_young_minus_old"] > 0, "young>old",
+                    np.where(out["delta_young_minus_old"] < 0, "young<old", "tie"))
+
+# QC: 每個 celltype 的 rxn_base 數量應該很少
+qc = out.groupby("celltype")["rxn_base"].nunique()
+if (qc > 8).any() or (qc < 2).any():
+    raise SystemExit(f"QC FAIL: rxn_base counts per celltype not in [2,8]. Got:\n{qc.to_string()}")
+
+# write outputs
+tsv_out = step8 / "summary_NET_noETC_scaled_noEX.tsv"
+out = out.sort_values(["celltype","rxn_base"]).reset_index(drop=True)
+out.to_csv(tsv_out, sep="\t", index=False)
+
+# -------------------------
+# beeswarm plot
+# -------------------------
+celltype_order = ["MuSC", "Type I", "Type II", "Specialized MF"]
+out["celltype"] = pd.Categorical(out["celltype"], categories=celltype_order, ordered=True)
+plot_df = out.sort_values("celltype").copy()
+
+q_sig = 0.05
+plot_df["sig"] = plot_df["q_bh"] < q_sig
+plot_df["dir2"] = np.where(plot_df["cohensD_young_minus_old"] > 0, "up_in_young", "down_in_young")
+
+colors = []
+for s, d in zip(plot_df["sig"], plot_df["dir2"]):
+    if not s:
+        colors.append("0.7")
+    elif d == "up_in_young":
+        colors.append("tab:red")
+    else:
+        colors.append("tab:blue")
+
+fig, ax = plt.subplots(figsize=(10.5, 6), dpi=220)
+y_map = {ct:i for i, ct in enumerate(celltype_order)}
+y0 = plot_df["celltype"].map(y_map).astype(float).values
+y = y0.copy()
+
+for ct in celltype_order:
+    m = (plot_df["celltype"] == ct).values
+    if m.sum() == 0:
+        continue
+    y[m] = y0[m] + beeswarm_offsets(plot_df.loc[m, "cohensD_young_minus_old"].values,
+                                    step=0.12, bin_width=0.10, max_swarm=0.42)
+
+ax.scatter(plot_df["cohensD_young_minus_old"].values, y, s=55, c=colors, linewidths=0, alpha=0.95)
+ax.axvline(0, linestyle="--", linewidth=1)
+
+ax.set_yticks(range(len(celltype_order)))
+ax.set_yticklabels(celltype_order)
+ax.set_xlabel("Cohen's d (young minus old), NET score")
+ax.set_ylabel("Cell type")
+ax.set_title("CoQ10 noETC NET shifts (scaled, donor-level, EX removed)")
+
+from matplotlib.lines import Line2D
+legend_elems = [
+    Line2D([0],[0], marker="o", color="w", label="Up in young (q<0.05)",
+           markerfacecolor="tab:red", markersize=7),
+    Line2D([0],[0], marker="o", color="w", label="Down in young (q<0.05)",
+           markerfacecolor="tab:blue", markersize=7),
+    Line2D([0],[0], marker="o", color="w", label="NS",
+           markerfacecolor="0.7", markersize=7),
+]
+ax.legend(handles=legend_elems, frameon=False, loc="upper right")
+
+fig.tight_layout()
+png_out = step8 / "beeswarm_NET_noETC_scaled_noEX.png"
+fig.savefig(png_out)
+
+# also dump QC info
+qc_txt = step8 / "QC_noETC_noEX_counts.txt"
+with open(qc_txt, "w") as f:
+    f.write("rxn_base counts per celltype:\n")
+    f.write(qc.to_string() + "\n")
+
+print("WROTE:", tsv_out)
+print("WROTE:", png_out)
+print("WROTE:", qc_txt)
+print("rxn_base counts:\n", qc.to_string())
