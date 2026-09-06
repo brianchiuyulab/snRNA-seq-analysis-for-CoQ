@@ -16,7 +16,7 @@ import anndata as ad
 # ==============================================================================
 # USER CONFIG
 # ==============================================================================
-ROOT = os.environ.get("COQ_SNRNA_PROJECT_ROOT", r"C:\Users\User\Desktop\Single cell for CoQ")
+ROOT = os.environ.get("COQ_SNRNA_PROJECT_ROOT", os.getcwd())
 PROCESS_DIR = os.path.join(ROOT, "Process_version")
 TABLE1_XLSX = os.path.join(ROOT, "Table1.xlsx")
 
