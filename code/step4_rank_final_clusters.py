@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from pathlib import Path
 
@@ -24,10 +25,7 @@ import scanpy as sc
 from scipy import sparse
 
 
-DEFAULT_H5AD = Path(
-    r"C:\Users\User\Desktop\Single cell for CoQ\Data_raw\step5_out_v21"
-    r"\annotated_paper_cluster_level_v21.h5ad"
-)
+DEFAULT_H5AD = Path(os.environ.get("COQ_SNRNA_H5AD", "analysis_input.h5ad"))
 DEFAULT_OUT = Path(__file__).resolve().parents[1] / "tables"
 
 
