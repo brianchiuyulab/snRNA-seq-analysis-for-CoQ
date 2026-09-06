@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 
 import anndata as ad
 import matplotlib.pyplot as plt
@@ -14,12 +15,9 @@ import scipy.sparse as sp
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = Path(
-    r"C:\Users\User\Desktop\Single cell for CoQ\Data_raw\step5_out_v21"
-    r"\annotated_paper_cluster_level_v21.h5ad"
-)
-QC_SUMMARY = Path(r"C:\Users\User\Desktop\Single cell for CoQ\Data_raw\step2_out\qc_summary.tsv")
-SCRUB_SUMMARY = Path(r"C:\Users\User\Desktop\Single cell for CoQ\Data_raw\step2_out\scrublet_summary.tsv")
+SOURCE = Path(os.environ.get("COQ_SNRNA_H5AD", "analysis_input.h5ad"))
+QC_SUMMARY = Path(os.environ.get("COQ_SNRNA_QC_SUMMARY", "qc_summary.tsv"))
+SCRUB_SUMMARY = Path(os.environ.get("COQ_SNRNA_SCRUBLET_SUMMARY", "scrublet_summary.tsv"))
 METADATA = ROOT / "metadata" / "cell_metadata.tsv.gz"
 OUTDIR = ROOT / "figures"
 TABLEDIR = ROOT / "tables"
