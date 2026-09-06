@@ -15,5 +15,5 @@ python "$root\code\step4_freeze_annotations.py" --source $H5ad
 python "$root\code\make_qc_annotation_figures.py"
 python "$root\code\make_coq_donor_figure.py"
 
-Write-Host "Release rebuilt. Final figures are in $root\figures. COMPASS was not run."
+Write-Host "Release rebuilt. Final figures are in $root\figures."
 
