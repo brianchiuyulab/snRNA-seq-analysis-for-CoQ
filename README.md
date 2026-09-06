@@ -10,7 +10,9 @@ definition require a separate rerun decision.
 ## Current analysis status
 
 - Local data: 102 libraries from 22 human donors and 482,115 raw nuclei.
-- QC: UMI count ≥1,000, detected genes ≥500 and mitochondrial fraction ≤5%.
+- Project QC: UMI count ≥1,000, detected genes ≥500 and mitochondrial fraction
+  ≤5%. These are the thresholds used in this reanalysis, not a claim of exact
+  source-paper filter reproduction.
 - Post-QC: 159,718 nuclei.
 - Scrublet: 2,634 predicted doublets; final marker and donor analyses use
   157,084 singlets.
@@ -52,6 +54,12 @@ Six comparisons have nominal P<0.05, but none of 52 tests passes global BH
 q<0.05. COQ8A is not significant in Type I, Type II, Specialized MF or MuSC.
 The nominal stars therefore remain descriptive and cannot support an FDR-level
 claim.
+
+The prespecified COQ8A sensitivity audit is implemented in
+`code/check_coq8a_sensitivity.py`. Across 776 calculable specifications, raw
+P<0.05 occurred only when donor-cell-type groups with as few as one nucleus were
+allowed; no specification with a minimum of five or more nuclei had raw P<0.05,
+and no exploratory specification passed BH correction.
 
 ## Repository structure
 
@@ -110,5 +118,4 @@ size. The local cell metadata sidecar joins the immutable H5AD by `cell_id`.
 - Source article: https://pmc.ncbi.nlm.nih.gov/articles/PMC11062927/
 - Source annotation code: https://github.com/123anjuan/HMA/blob/main/block%201/hu-snRNAseq_prior_annotation.Rmd
 - Donor-level pseudobulk rationale: https://pmc.ncbi.nlm.nih.gov/articles/PMC8479118/
-
 
