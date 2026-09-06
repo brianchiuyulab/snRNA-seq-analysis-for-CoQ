@@ -116,12 +116,12 @@ def main():
     ap.add_argument("--regress_n_genes", type=int, default=0, choices=[0, 1])
     ap.add_argument("--pca_n_comps", type=int, default=50)
     ap.add_argument("--use_pcs", type=int, default=30)
-    ap.add_argument("--n_neighbors", type=int, default=10)
+    ap.add_argument("--n_neighbors", type=int, default=30)
 
     # clustering
     ap.add_argument("--cluster_method", default="louvain", choices=["louvain", "leiden", "none"],
                     help="paper uses louvain; if louvain fails, script will auto-fallback to leiden unless 'none'")
-    ap.add_argument("--cluster_resolution", type=float, default=1.0)
+    ap.add_argument("--cluster_resolution", type=float, default=2.0)
 
     # umap
     ap.add_argument("--umap_min_dist", type=float, default=0.5)
