@@ -227,29 +227,30 @@ def make_figure(pseudobulk: pd.DataFrame, statistics: pd.DataFrame) -> None:
                     color="#9B1B67", zorder=4)
     ax.set_xticks(range(len(columns)))
     ax.set_xticklabels([label.replace("Older, ", "") for label in columns], rotation=42, ha="right", fontsize=10.0)
-    ax.set_yticks(range(len(GENES)), GENES[::-1])
+    ax.set_yticks(range(len(GENES)), [rf"$\it{{{gene}}}$" for gene in GENES[::-1]])
     ax.tick_params(axis="y", labelsize=11.0)
     ax.set_xlim(-0.6, len(columns) - 0.4)
     ax.set_ylim(-0.6, len(GENES) - 0.4)
-    ax.grid(color="#eeeeee", linewidth=0.6, zorder=0)
+    for boundary in (1.5, 3.5, 5.5):
+        ax.axvline(boundary, color="#E1E1E1", linewidth=0.8, zorder=0)
     ax.set_xlabel("Older group versus young", fontsize=12.0)
     cbar = fig.colorbar(scatter, ax=ax, shrink=0.62, pad=0.025)
-    cbar.set_label("log2 fold change", fontsize=11.0)
+    cbar.set_label(r"$\log_{2}$ fold change", fontsize=11.0)
     cbar.ax.tick_params(labelsize=10.0)
     size_handles = [
         ax.scatter([], [], s=22 + 33 * value, facecolor="white", edgecolor="#4d4d4d", label=f"{10**(-value):.2g}")
         for value in (0.5, 1.0, 2.0)
     ]
     size_handles.append(plt.Line2D([], [], marker="$*$", linestyle="", color="#9B1B67",
-                                   label="P < 0.05", markersize=9))
-    ax.legend(handles=size_handles, title="Adjusted P", frameon=False,
+                                   label=r"$p < 0.05$", markersize=9))
+    ax.legend(handles=size_handles, title=r"BH-adjusted $p$", frameon=False,
               loc="upper left", bbox_to_anchor=(1.01, 0.34), fontsize=9.5, title_fontsize=10.0)
     DOTPLOT_FIGURE.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(DOTPLOT_FIGURE, dpi=500, bbox_inches="tight", facecolor="white")
     plt.close(fig)
 
     # Focused muscle-lineage panel with conventional box plots and all donor
-    # points. Brackets are reserved for BH-adjusted P < 0.05.
+    # points. Brackets are reserved for BH-adjusted p < 0.05.
     fig, ax2 = plt.subplots(figsize=(8.6, 5.5), constrained_layout=True)
     coq8a = pseudobulk.loc[pseudobulk["gene"].eq("COQ8A")].copy()
     figure_cell_types = PATHWAY_CELL_TYPES
@@ -290,12 +291,12 @@ def make_figure(pseudobulk: pd.DataFrame, statistics: pd.DataFrame) -> None:
                     positions[(cell_type, "Young")],
                     positions[(cell_type, comparison)],
                     ymax + 0.12 + comp_index * 0.28,
-                    rf"$P_{{\mathrm{{adj}}}} = {adjusted_p:.3f}$",
+                    rf"BH-adjusted $p$ = {adjusted_p:.3f}",
                 )
 
     ax2.set_xticks([index * 1.18 for index in range(len(figure_cell_types))], figure_cell_types)
     ax2.tick_params(axis="both", labelsize=11.5)
-    ax2.set_ylabel("COQ8A expression\n(log1p CPM)", fontsize=12.5)
+    ax2.set_ylabel(r"$\it{COQ8A}$ expression" + "\n" + r"ln(CPM + 1)", fontsize=12.5)
     ax2.set_ylim(bottom=-0.22)
     ax2.yaxis.grid(True, color="#E6E6E6", linewidth=0.7)
     ax2.set_axisbelow(True)

@@ -68,7 +68,7 @@ def make_qc_figure(meta: pd.DataFrame) -> None:
     ax.set(xscale="log", yscale="log", xlabel="Nuclei before QC", ylabel="Nuclei after QC")
     ax.legend(handles=[
         Line2D([], [], marker="o", ls="", color="#377eb8", label="Scrublet run"),
-        Line2D([], [], marker="o", ls="", color="#fdae61", label="<200 nuclei; Scrublet skipped"),
+        Line2D([], [], marker="o", ls="", color="#fdae61", label="Scrublet not run (<200 nuclei)"),
     ], frameon=False, fontsize=10)
     fig.savefig(OUTDIR / "Fig01_QC_nuclei_before_after.png", dpi=500, bbox_inches="tight")
     plt.close(fig)
@@ -187,7 +187,7 @@ def make_marker_dotplot(adata: ad.AnnData, meta: pd.DataFrame) -> None:
     ).clip(-2, 2)
     table.to_csv(TABLEDIR / "celltype_marker_dotplot_values.tsv.gz", sep="\t", index=False, compression="gzip")
 
-    fig, ax = plt.subplots(figsize=(12.2, 5.6), constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(9.4, 5.35), constrained_layout=True)
     xmap = {gene: i for i, gene in enumerate(available)}
     ymap = {cell_type: len(CELLTYPE_ORDER) - index - 1 for index, cell_type in enumerate(CELLTYPE_ORDER)}
     plot = table.copy()
@@ -196,18 +196,16 @@ def make_marker_dotplot(adata: ad.AnnData, meta: pd.DataFrame) -> None:
         s=7 + 105 * plot["pct_expressing"], c=plot["mean_z_by_gene"],
         cmap="RdBu_r", vmin=-2, vmax=2, edgecolor="0.55", linewidth=0.15,
     )
-    ax.set_xticks(range(len(available)), available, rotation=90, fontsize=10)
-    ax.set_yticks(range(len(CELLTYPE_ORDER)), CELLTYPE_ORDER[::-1], fontsize=10.5)
-    ax.set(xlabel="Marker gene", ylabel="", title="Canonical marker expression by annotated cell type")
-    ax.set_xlabel("Marker gene", fontsize=11.5)
-    ax.set_title("Canonical marker expression by annotated cell type", fontsize=13.0)
+    ax.set_xticks(range(len(available)), [rf"$\it{{{gene}}}$" for gene in available], rotation=90, fontsize=10.5)
+    ax.set_yticks(range(len(CELLTYPE_ORDER)), CELLTYPE_ORDER[::-1], fontsize=11)
+    ax.set(xlabel="", ylabel="")
     for boundary in (4.5, 8.5, 11.5, 15.5, 17.5, 19.5, 23.5, 25.5):
         ax.axvline(boundary, color="#d9d9d9", linewidth=0.7)
     cbar = fig.colorbar(scatter, ax=ax, pad=0.01, shrink=0.65)
-    cbar.set_label("Mean expression z-score by gene", fontsize=10.5)
+    cbar.set_label("Mean expression\n(z score within gene)", fontsize=10.5)
     cbar.ax.tick_params(labelsize=9.5)
     handles = [plt.scatter([], [], s=4 + 80 * p, facecolor="white", edgecolor="0.4", label=f"{int(p*100)}%") for p in (0.1, 0.5, 0.9)]
-    ax.legend(handles=handles, title="Expressing", frameon=False,
+    ax.legend(handles=handles, title="Nuclei expressing", frameon=False,
               bbox_to_anchor=(1.02, 0.18), loc="center left", fontsize=9.5, title_fontsize=10.0)
     fig.savefig(OUTDIR / "Fig07_Celltype_marker_dotplot.png", dpi=400, bbox_inches="tight")
     plt.close(fig)
