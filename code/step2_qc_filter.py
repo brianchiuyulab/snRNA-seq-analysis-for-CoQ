@@ -29,7 +29,7 @@ import scipy.sparse as sp
 # -------------------------
 # Paths (Windows-safe, use forward slashes)
 # -------------------------
-BASE = os.environ.get("COQ_SNRNA_DATA_ROOT", "C:/Users/User/Desktop/Single cell for CoQ/Data_raw")
+BASE = os.environ.get("COQ_SNRNA_DATA_ROOT", os.path.join(os.getcwd(), "Data_raw"))
 IN_GLOB = os.path.join(BASE, "step1_out_v2", "counts_h5ad", "*.counts.h5ad")
 OUT_ROOT = os.path.join(BASE, "step2_out")
 OUT_QC_DIR = os.path.join(OUT_ROOT, "qc_h5ad")
