@@ -24,11 +24,15 @@ TABLEDIR = ROOT / "tables"
 
 MARKERS = [
     "MYH7", "TNNT1", "MYH1", "MYH2", "TNNT3",
-    "CHRNA1", "CHRNG", "MUSK", "NCAM1", "PHLDB2", "CHRNE", "COL22A1",
+    "CHRNA1", "CHRNG", "MUSK", "NCAM1",
     "PDGFRA", "DCN", "COL1A2", "PECAM1", "VWF", "EMCN", "RHOJ",
-    "PAX7", "LYZ", "F13A1", "CD3D", "NKG7",
+    "PAX7", "CD82", "LYZ", "F13A1", "CD3D", "NKG7",
     "PDGFRB", "NOTCH3", "CARMN", "TAGLN", "PLIN1", "PPARG",
-    "HBB", "HBA1", "ALAS2", "RBFOX3", "SYT1", "SNAP25", "MT-RNR2",
+]
+
+CELLTYPE_ORDER = [
+    "Type I", "Type II", "Specialized MF", "MuSC", "FAP", "EC", "SMC",
+    "Adipocyte", "Myeloid cell", "Lymphocyte",
 ]
 
 PALETTE = {
@@ -104,9 +108,13 @@ def make_qc_figure(meta: pd.DataFrame) -> None:
         f"{total_doublets:,} predicted doublets flagged",
         fontsize=11,
     )
-    for suffix in ("png", "pdf"):
-        if suffix == "png":
-            fig.savefig(OUTDIR / "Fig01_QC_overview.png", dpi=300, bbox_inches="tight")
+    fig.text(
+        0.5, -0.015,
+        "QC retained nuclei with at least 1,000 UMIs, at least 500 detected genes and at most 5% "
+        "mitochondrial counts (Lai et al., Nature 2024).",
+        ha="center", fontsize=8, color="#333333",
+    )
+    fig.savefig(OUTDIR / "Fig01_QC_overview.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -121,68 +129,79 @@ def make_umap_figure(adata: ad.AnnData, meta: pd.DataFrame) -> None:
     for cell_type in sorted(pd.unique(types[singlet])):
         mask = singlet & (types == cell_type)
         ax.scatter(coords[mask, 0], coords[mask, 1], s=0.6, alpha=0.55, color=PALETTE.get(cell_type, "#999999"), rasterized=True, label=cell_type)
-    ax.set(xlabel="UMAP 1", ylabel="UMAP 2", title="Minimal-error v22 cell-type labels")
+    ax.set(xlabel="UMAP 1", ylabel="UMAP 2", title="Reviewed cell-type annotations")
     ax.set_xticks([]); ax.set_yticks([])
     ax.legend(markerscale=6, frameon=False, fontsize=7, bbox_to_anchor=(1.01, 1), loc="upper left")
     panel_label(ax, "A")
 
     ax = axes[1]
-    ax.scatter(coords[singlet, 0], coords[singlet, 1], s=0.45, alpha=0.25, color="#bdbdbd", rasterized=True)
-    for cluster_id in sorted(pd.unique(clusters[singlet]), key=int):
+    cluster_ids = sorted(pd.unique(clusters[singlet]), key=int)
+    cluster_palette = plt.get_cmap("gist_ncar", len(cluster_ids))
+    for index, cluster_id in enumerate(cluster_ids):
         mask = singlet & (clusters == cluster_id)
+        ax.scatter(coords[mask, 0], coords[mask, 1], s=0.55, alpha=0.52,
+                   color=cluster_palette(index), rasterized=True)
         centre = np.median(coords[mask], axis=0)
         ax.text(centre[0], centre[1], cluster_id, ha="center", va="center", fontsize=7,
                 bbox=dict(boxstyle="circle,pad=0.18", fc="white", ec="0.25", lw=0.5))
-    ax.set(xlabel="UMAP 1", ylabel="UMAP 2", title="Final 34 clusters used for marker ranking")
+    ax.set(xlabel="UMAP 1", ylabel="UMAP 2", title="Unsupervised Louvain clusters (resolution 2.0)")
     ax.set_xticks([]); ax.set_yticks([])
     panel_label(ax, "B")
-    for suffix in ("png", "pdf"):
-        if suffix == "png":
-            fig.savefig(OUTDIR / "Fig02_Annotation_UMAP.png", dpi=300, bbox_inches="tight")
+    fig.text(
+        0.5, -0.015,
+        "Harmony-corrected 30-PC representation; 30-neighbour graph; UMAP visualization. "
+        "Predicted doublets are not shown.",
+        ha="center", fontsize=8, color="#333333",
+    )
+    fig.savefig(OUTDIR / "Fig02_Annotation_UMAP.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 
 def make_marker_dotplot(adata: ad.AnnData, meta: pd.DataFrame) -> None:
-    available = [gene for gene in MARKERS if gene in adata.raw.var_names]
+    available = [gene for gene in MARKERS if gene in adata.var_names]
     singlet = meta["is_singlet_v22"].to_numpy(bool)
-    clusters = meta["louvain_r2"].astype(str).to_numpy()
-    raw_subset = adata.raw[:, available].X
-    matrix = raw_subset.to_memory() if hasattr(raw_subset, "to_memory") else raw_subset
-    matrix = matrix.tocsr() if sp.issparse(matrix) else np.asarray(matrix)
+    cell_types = meta["cell_type_v22"].astype(str).to_numpy()
+    gene_indices = adata.var_names.get_indexer(available)
+    matrix = adata.layers["counts"][:, gene_indices]
+    matrix = matrix.tocsr() if sp.issparse(matrix) else sp.csr_matrix(matrix)
+    library_size = meta["total_counts"].to_numpy(float)
 
     rows = []
-    for cluster_id in map(str, range(34)):
-        mask = singlet & (clusters == cluster_id)
-        block = matrix[mask]
-        mean = np.asarray(block.mean(axis=0)).ravel()
-        pct = np.asarray((block > 0).mean(axis=0)).ravel() if sp.issparse(block) else (block > 0).mean(axis=0)
+    for cell_type in CELLTYPE_ORDER:
+        mask = singlet & (cell_types == cell_type)
+        block_counts = matrix[mask].tocsr()
+        pct = np.asarray(block_counts.getnnz(axis=0)).ravel() / block_counts.shape[0]
+        scale = 1e4 / np.maximum(library_size[mask], 1.0)
+        block_expression = block_counts.multiply(scale[:, None]).tocsr()
+        block_expression.data = np.log1p(block_expression.data)
+        mean = np.asarray(block_expression.mean(axis=0)).ravel()
         for gene, avg, fraction in zip(available, mean, pct):
-            rows.append({"cluster_id": cluster_id, "gene": gene, "mean_log1p_cp10k": avg, "pct_expressing": fraction})
+            rows.append({"cell_type": cell_type, "gene": gene, "mean_log1p_cp10k": avg, "pct_expressing": fraction})
     table = pd.DataFrame(rows)
     table["mean_z_by_gene"] = table.groupby("gene")["mean_log1p_cp10k"].transform(
         lambda x: (x - x.mean()) / (x.std(ddof=0) if x.std(ddof=0) > 0 else 1)
     ).clip(-2, 2)
-    table.to_csv(TABLEDIR / "final34_marker_dotplot_values.tsv.gz", sep="\t", index=False, compression="gzip")
+    table.to_csv(TABLEDIR / "celltype_marker_dotplot_values.tsv.gz", sep="\t", index=False, compression="gzip")
 
-    fig, ax = plt.subplots(figsize=(15.5, 10.2), constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(12.2, 5.6), constrained_layout=True)
     xmap = {gene: i for i, gene in enumerate(available)}
-    ymap = {str(i): 33 - i for i in range(34)}
+    ymap = {cell_type: len(CELLTYPE_ORDER) - index - 1 for index, cell_type in enumerate(CELLTYPE_ORDER)}
     plot = table.copy()
     scatter = ax.scatter(
-        plot["gene"].map(xmap), plot["cluster_id"].map(ymap),
-        s=4 + 80 * plot["pct_expressing"], c=plot["mean_z_by_gene"],
+        plot["gene"].map(xmap), plot["cell_type"].map(ymap),
+        s=7 + 105 * plot["pct_expressing"], c=plot["mean_z_by_gene"],
         cmap="RdBu_r", vmin=-2, vmax=2, edgecolor="0.55", linewidth=0.15,
     )
     ax.set_xticks(range(len(available)), available, rotation=90, fontsize=8)
-    ax.set_yticks(range(34), [str(i) for i in range(33, -1, -1)], fontsize=8)
-    ax.set(xlabel="Marker gene", ylabel="Final cluster", title="Cluster-level manual annotation evidence (singlets only)")
+    ax.set_yticks(range(len(CELLTYPE_ORDER)), CELLTYPE_ORDER[::-1], fontsize=8)
+    ax.set(xlabel="Marker gene", ylabel="", title="Canonical marker expression by annotated cell type")
+    for boundary in (4.5, 8.5, 11.5, 15.5, 17.5, 19.5, 23.5, 25.5):
+        ax.axvline(boundary, color="#d9d9d9", linewidth=0.7)
     cbar = fig.colorbar(scatter, ax=ax, pad=0.01, shrink=0.65)
     cbar.set_label("Mean expression z-score by gene")
     handles = [plt.scatter([], [], s=4 + 80 * p, facecolor="white", edgecolor="0.4", label=f"{int(p*100)}%") for p in (0.1, 0.5, 0.9)]
     ax.legend(handles=handles, title="Expressing", frameon=False, bbox_to_anchor=(1.02, 0.18), loc="center left")
-    for suffix in ("png", "pdf"):
-        if suffix == "png":
-            fig.savefig(OUTDIR / "Fig03_Final34_marker_dotplot.png", dpi=300, bbox_inches="tight")
+    fig.savefig(OUTDIR / "Fig03_Celltype_marker_dotplot.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
 
 
