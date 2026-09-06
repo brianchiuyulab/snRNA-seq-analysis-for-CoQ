@@ -11,7 +11,7 @@ cluster_id	cell_type_v22	cell_state_v22	myonuclear_parent_v22	annotation_confide
 9	Unresolved myonuclei	Neural-adhesion-high mixed-fibre	Mixed	low	definite_correction	FALSE	CNTNAP2;CSMD1;PTPRD;NRXN3;TTN	Neuron-like label rejected because the cluster retains a myonuclear programme; excluded rather than reassigned to a COMPASS group
 10	Type I	Body	Type I	high	unchanged	TRUE	TNNT1;MYBPC1;ATP2A2;TPM3	Canonical slow-fibre programme
 11	Type I	Body	Type I	high	unchanged	TRUE	TNNT1;ATP2A2;TPM3;MYH7	Canonical slow-fibre programme
-12	Type II	Mitochondrial-high	Type II	medium	unchanged_with_flag	TRUE	MT-RNR2;MT-ATP6;MT-CO1;TNNT3	Existing Type II identity retained; high mitochondrial programme is a QC/sensitivity flag, not a forced relabel
+12	Type II	Mitochondrial-high	Type II	medium	unchanged_with_flag	TRUE	MT-RNR2;MT-ATP6;MT-CO1;TNNT3	Type II identity retained with a mitochondrial-high state designation
 13	Type II	Body	Type II	high	unchanged	TRUE	TNNT3;MYH1;TNNI2;ATP1A2	Canonical fast-fibre programme
 14	EC	Vascular endothelial	NA	high	unchanged	TRUE	PTPRB;VWF;PECAM1;LDB2;MECOM	Canonical endothelial programme
 15	Specialized MF	Denervation/atrophy-associated	Type I	medium	unchanged	TRUE	TNNT1;CHRNG;FBXO32;ATP2A2	Existing broad group retained; not called NMJ
@@ -27,7 +27,7 @@ cluster_id	cell_type_v22	cell_state_v22	myonuclear_parent_v22	annotation_confide
 25	EC	Vascular endothelial	NA	high	unchanged	TRUE	LDB2;PTPRB;VWF;PECAM1;MECOM	Canonical endothelial programme
 26	Type I	Body	Type I	high	unchanged	TRUE	TNNT1;MYL2;TPM3;MYH7	Canonical slow-fibre programme
 27	Unresolved nuclei	Mixed/low-confidence	Mixed	low	definite_correction	FALSE	SLC14A2;SYNPO2;KLRD1;COL14A1	Erythrocyte label rejected; mixed programmes and no defensible single lineage
-28	FAP	Globin-locus-high	NA	low	unchanged_with_flag	TRUE	HBG2;HBE1;EBF1;NEGR1	Existing FAP group retained but extreme globin-locus signal is flagged for sensitivity analysis
+28	FAP	Globin-locus-high	NA	low	unchanged_with_flag	TRUE	HBG2;HBE1;EBF1;NEGR1	FAP identity retained with cautious interpretation of the globin-locus-high state
 29	Unresolved myonuclei	PCDHA-locus-high adhesion state	Mixed	low	definite_correction	FALSE	PCDHA1;PCDHA2;PCDHA3;PCDHA4;TTN	Erythrocyte label rejected; not reassigned to a COMPASS group pending validation
 30	EC	MMRN1+ RHOJ+ endothelial	NA	high	definite_correction	TRUE	LDB2;TFPI;RHOJ;MMRN1;ERG	Fibroblast-like label rejected by a coherent endothelial programme
 31	Adipocyte	Mature adipocyte	NA	high	unchanged	TRUE	PLIN1;PDE3B;PPARG;AQP7	Canonical adipocyte programme
