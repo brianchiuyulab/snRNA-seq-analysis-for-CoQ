@@ -290,7 +290,7 @@ def make_figure(pseudobulk: pd.DataFrame, statistics: pd.DataFrame) -> None:
                     positions[(cell_type, "Young")],
                     positions[(cell_type, comparison)],
                     ymax + 0.12 + comp_index * 0.28,
-                    f"adjusted P={adjusted_p:.3g}",
+                    rf"$P_{{\mathrm{{adj}}}} = {adjusted_p:.3f}$",
                 )
 
     ax2.set_xticks([index * 1.18 for index in range(len(figure_cell_types))], figure_cell_types)
