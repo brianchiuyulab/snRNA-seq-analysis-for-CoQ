@@ -52,7 +52,7 @@ def make_qc_figure(meta: pd.DataFrame) -> None:
     scrub = pd.read_csv(SCRUB_SUMMARY, sep="\t")
     merged = qc.merge(scrub[["sample_id", "scrublet_ran", "n_predicted_doublets"]], on="sample_id", how="left")
     merged["retention"] = merged["n_cells_after"] / merged["n_cells_before"]
-    merged.to_csv(TABLEDIR / "library_qc_audit.tsv", sep="\t", index=False)
+    merged.to_csv(TABLEDIR / "library_qc_summary.tsv", sep="\t", index=False)
 
     fig, axes = plt.subplots(2, 2, figsize=(10.5, 8.0), constrained_layout=True)
 
