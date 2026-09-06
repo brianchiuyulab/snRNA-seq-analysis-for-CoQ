@@ -26,9 +26,6 @@ import pandas as pd
 import anndata as ad
 import scipy.sparse as sp
 
-# scrublet import (installed via pip)
-import scrublet as scr
-
 def to_csr(X):
     if sp.issparse(X):
         return X.tocsr()
@@ -45,13 +42,18 @@ def safe_int(x, default=0):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base", required=True, help="Base path, e.g. C:/Users/User/Desktop/Single cell for CoQ/Data_raw")
+    ap.add_argument(
+        "--base",
+        default=os.environ.get("COQ_SNRNA_DATA_ROOT", os.path.join(os.getcwd(), "Data_raw")),
+        help="Data_raw directory containing step2_out/qc_h5ad/.",
+    )
     ap.add_argument("--filter_doublets", action="store_true", help="If set, remove predicted doublets and write filtered object")
     ap.add_argument("--expected_doublet_rate", type=float, default=0.06, help="Scrublet expected_doublet_rate")
     ap.add_argument("--sim_doublet_ratio", type=float, default=2.0, help="Scrublet sim_doublet_ratio")
     ap.add_argument("--pca_n", type=int, default=30, help="Target PCA components (will be auto-capped)")
     ap.add_argument("--min_cells_for_scrublet", type=int, default=200, help="Skip Scrublet if cells < this")
     args = ap.parse_args()
+    import scrublet as scr
 
     BASE = args.base
 
@@ -157,4 +159,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

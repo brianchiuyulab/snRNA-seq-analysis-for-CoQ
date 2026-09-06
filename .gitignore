@@ -3,7 +3,6 @@ metadata/
 tables/
 figures/
 presentation/
-.pptx_build/
+.ppt_build/
 __pycache__/
 *.pyc
-

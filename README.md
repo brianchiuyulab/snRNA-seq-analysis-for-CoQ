@@ -4,6 +4,9 @@ This repository contains the analysis code used to examine coenzyme Q pathway
 genes in the human skeletal-muscle ageing atlas reported by Lai et al.
 (*Nature*, 2024; DOI: 10.1038/s41586-024-07348-6).
 
+This frozen release covers preprocessing, QC, clustering, annotation and
+donor-level CoQ expression analysis. COMPASS is intentionally outside its scope.
+
 ## Dataset
 
 The local analysis includes 102 snRNA-seq libraries from 22 human donors. Raw
@@ -38,9 +41,12 @@ Data_raw/step5_out_v21/annotated_paper_cluster_level_v21.h5ad
    change of at least 0.25.
 6. `step4_freeze_annotations.py` applies the reviewed cluster annotation table
    and writes a cell-level metadata sidecar linked to the H5AD by cell identifier.
-7. `make_coq_donor_figure.py` aggregates raw UMI counts by biological donor and
-   cell type. Every observed donor-cell-type combination is included; no minimum
-   nucleus count is imposed.
+7. `make_coq_donor_figure.py` aggregates raw UMI counts by biological donor in
+   four muscle-lineage populations (MuSC, type I, type II and specialized
+   myonuclei). Every observed donor-cell-type combination is included; no
+   minimum nucleus count is imposed.
+8. `validate_release.py` verifies the frozen H5AD linkage, annotation map,
+   expected figures and tables, donor counts and COQ8A statistics.
 
 Cell types were assigned manually from ranked cluster markers, canonical marker
 panels, UMAP structure and the source atlas annotation framework. Ambiguous
@@ -55,16 +61,20 @@ of the source atlas global clustering, which reported a 10-neighbour graph.
 
 Donors were classified as young (age <=46 years), older with Barthel Index 100,
 or older with Barthel Index <100. Raw UMI counts were summed within each donor
-and annotated myogenic cell type and converted to CPM using the corresponding
+and muscle-lineage cell type and converted to CPM using the corresponding
 pseudobulk library size. Group comparisons use two-sided Mann-Whitney U tests
-with donors as independent observations.
+on donor-level log1p(CPM), with donors as independent observations. For each
+gene-by-cell-type hypothesis, the two prespecified older-versus-young P values
+are Benjamini-Hochberg adjusted together. Genes and cell types are not pooled
+into one multiplicity family.
 
 In MuSCs, COQ8A expression differs between young donors and both older groups:
 
-- older, Barthel Index 100 versus young: P = 0.03333;
-- older, Barthel Index <100 versus young: P = 0.02225.
+- older, Barthel Index 100 versus young: raw P = 0.03333, adjusted P = 0.03333;
+- older, Barthel Index <100 versus young: raw P = 0.02225, adjusted P = 0.03333.
 
-The figure denotes nominal P <0.05 with stars and reports the exact P values.
+The focused COQ8A figure shows conventional box plots with individual donor
+points and uses brackets only for adjusted P <0.05.
 
 ## Reproduction
 
@@ -102,8 +112,14 @@ The source object must contain raw UMI counts in `layers['counts']`, normalized
 log1p counts-per-10,000 in `raw.X`, final cluster labels in `obs['louvain_r2']`,
 and UMAP coordinates in `obsm['X_umap_r2']`.
 
+To check an existing release without rebuilding marker statistics:
+
+```powershell
+python .\code\validate_release.py --h5ad "D:\path\to\annotated_paper_cluster_level_v21.h5ad"
+```
+
 The nine-slide figure summary is available locally at
-`presentation/snRNA_analysis_summary_9fig_final.pptx`.
+`presentation/snRNA_analysis_summary_final.pptx`.
 
 ## Outputs
 
@@ -117,7 +133,7 @@ Figures:
 - `figures/Fig06_Louvain_clusters_UMAP.png`
 - `figures/Fig07_Celltype_marker_dotplot.png`
 - `figures/Fig08_COQ_pathway_dotplot.png`
-- `figures/Fig09_COQ8A_donor_boxplot.png`
+- `figures/Fig09_COQ8A_muscle_lineage.png`
 
 Tables:
 
@@ -144,4 +160,3 @@ in this reanalysis were obtained from OMIX004308.
   *Nature* 628, 154-164 (2024). https://doi.org/10.1038/s41586-024-07348-6
 - Source annotation notebook:
   https://github.com/123anjuan/HMA/blob/main/block%201/hu-snRNAseq_prior_annotation.Rmd
-

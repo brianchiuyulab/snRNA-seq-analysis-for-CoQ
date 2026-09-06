@@ -83,20 +83,32 @@ def make_qc_figure(meta: pd.DataFrame) -> None:
     plt.close(fig)
 
     singlets = meta.loc[meta["is_singlet_v22"]].copy()
-    fig, ax = plt.subplots(figsize=(7.2, 5.4), constrained_layout=True)
+    fig, axes = plt.subplots(1, 4, figsize=(9.4, 3.8), constrained_layout=True)
     values = [
         np.log10(singlets["total_counts"].clip(lower=1)),
         np.log10(singlets["n_genes_by_counts"].clip(lower=1)),
         singlets["pct_counts_mt"],
         singlets["pct_counts_ribo"],
     ]
-    labels = ["log10 UMI", "log10 genes", "Mitochondrial %", "Ribosomal %"]
-    parts = ax.violinplot(values, showmeans=False, showmedians=True, widths=0.85)
-    for body in parts["bodies"]:
-        body.set_facecolor("#72b7b2"); body.set_edgecolor("none"); body.set_alpha(0.85)
-    parts["cmedians"].set_color("black")
-    ax.set_xticks(range(1, 5), labels, rotation=16, ha="right")
-    ax.set_ylabel("Value")
+    titles = ["UMI count", "Detected genes", "Mitochondrial RNA", "Ribosomal RNA"]
+    ylabels = ["log10(count)", "log10(genes)", "% of counts", "% of counts"]
+    thresholds = [np.log10(1000), np.log10(500), 5.0, None]
+    for ax, metric, title, ylabel, threshold in zip(axes, values, titles, ylabels, thresholds):
+        parts = ax.violinplot([metric], showmeans=False, showmedians=True, widths=0.72)
+        parts["bodies"][0].set_facecolor("#72B7B2")
+        parts["bodies"][0].set_edgecolor("none")
+        parts["bodies"][0].set_alpha(0.82)
+        parts["cmedians"].set_color("#202020")
+        parts["cmedians"].set_linewidth(1.4)
+        if threshold is not None:
+            ax.axhline(threshold, color="#555555", linestyle="--", linewidth=0.8)
+        ax.set_title(title, fontsize=11.5)
+        ax.set_ylabel(ylabel, fontsize=10.5)
+        ax.set_xticks([])
+        ax.tick_params(axis="y", labelsize=9.5)
+        ax.spines[["top", "right", "bottom"]].set_visible(False)
+        ax.yaxis.grid(True, color="#E8E8E8", linewidth=0.6)
+        ax.set_axisbelow(True)
     fig.savefig(OUTDIR / "Fig03_QC_nucleus_metrics.png", dpi=500, bbox_inches="tight")
     plt.close(fig)
 
@@ -216,4 +228,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

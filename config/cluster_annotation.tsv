@@ -33,4 +33,3 @@ cluster_id	cell_type_v22	cell_state_v22	myonuclear_parent_v22	annotation_confide
 31	Adipocyte	Mature adipocyte	NA	high	unchanged	TRUE	PLIN1;PDE3B;PPARG;AQP7	Canonical adipocyte programme
 32	Unresolved myonuclei	ZNF365-locus-high	Mixed	low	definite_correction	FALSE	ZNF365;AC024598.1;TTN-AS1;MYHAS	Erythrocyte label rejected; exact fibre state unresolved
 33	Type I	Low-RNA	Type I	medium	definite_correction	TRUE	TNNT1;MYH7;TTN;TRDN	Neuron-like label rejected because the cluster is muscle and Type-I leaning; low-RNA flag retained
-

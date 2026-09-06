@@ -4,6 +4,7 @@ import tarfile
 import gzip
 import shutil
 import tempfile
+import argparse
 from pathlib import Path
 
 import numpy as np
@@ -11,21 +12,6 @@ import pandas as pd
 import scipy.io
 import scipy.sparse as sp
 import anndata as ad
-
-
-# ==============================================================================
-# USER CONFIG
-# ==============================================================================
-ROOT = os.environ.get("COQ_SNRNA_PROJECT_ROOT", os.getcwd())
-PROCESS_DIR = os.path.join(ROOT, "Process_version")
-TABLE1_XLSX = os.path.join(ROOT, "Table1.xlsx")
-
-OUT_ROOT = os.path.join(ROOT, "Data_raw", "step1_out_v2")
-OUT_H5AD_DIR = os.path.join(OUT_ROOT, "counts_h5ad")
-os.makedirs(OUT_H5AD_DIR, exist_ok=True)
-
-MANIFEST_TSV = os.path.join(OUT_ROOT, "sample_manifest.tsv")
-FAIL_TSV = os.path.join(OUT_ROOT, "failures.tsv")
 
 
 # ==============================================================================
@@ -196,15 +182,42 @@ def ensure_unique_obsnames(adata: ad.AnnData, sample_id: str) -> None:
 # MAIN
 # ==============================================================================
 def main():
+    parser = argparse.ArgumentParser(
+        description="Import archived 10x count matrices for the snRNA-seq donors."
+    )
+    parser.add_argument(
+        "--project-root",
+        default=os.environ.get("COQ_SNRNA_PROJECT_ROOT", os.getcwd()),
+        help="Project directory containing Table1.xlsx and Process_version/.",
+    )
+    parser.add_argument("--process-dir", help="Override the archive directory.")
+    parser.add_argument("--table1", help="Override the donor metadata workbook.")
+    parser.add_argument("--out-root", help="Override the step1 output directory.")
+    args = parser.parse_args()
+
+    root = os.path.abspath(args.project_root)
+    process_dir = os.path.abspath(args.process_dir or os.path.join(root, "Process_version"))
+    table1_xlsx = os.path.abspath(args.table1 or os.path.join(root, "Table1.xlsx"))
+    out_root = os.path.abspath(args.out_root or os.path.join(root, "Data_raw", "step1_out_v2"))
+    out_h5ad_dir = os.path.join(out_root, "counts_h5ad")
+    manifest_tsv = os.path.join(out_root, "sample_manifest.tsv")
+    fail_tsv = os.path.join(out_root, "failures.tsv")
+
+    if not os.path.isfile(table1_xlsx):
+        raise FileNotFoundError(f"Donor metadata workbook not found: {table1_xlsx}")
+    if not os.path.isdir(process_dir):
+        raise FileNotFoundError(f"Archive directory not found: {process_dir}")
+    os.makedirs(out_h5ad_dir, exist_ok=True)
+
     # 1) Table1 donors (snRNA-seq only)
-    sn_subjects = read_table1_snRNA_subjects(TABLE1_XLSX)
+    sn_subjects = read_table1_snRNA_subjects(table1_xlsx)
     sn_subjects_set = set([x.upper() for x in sn_subjects])
     print(f"[INFO] Table1 snRNA subjects: {len(sn_subjects)} -> {sn_subjects}")
 
     # 2) tar list
-    tar_files = sorted([str(p) for p in Path(PROCESS_DIR).glob("*.tar.gz")] + [str(p) for p in Path(PROCESS_DIR).glob("*.tar")])
+    tar_files = sorted([str(p) for p in Path(process_dir).glob("*.tar.gz")] + [str(p) for p in Path(process_dir).glob("*.tar")])
     if len(tar_files) == 0:
-        raise RuntimeError(f"No tar/tar.gz found under: {PROCESS_DIR}")
+        raise RuntimeError(f"No tar/tar.gz found under: {process_dir}")
 
     manifest_rows = []
     fail_rows = []
@@ -237,7 +250,7 @@ def main():
                 batch = guess_batch(subject_id)
                 muscle = guess_muscle_from_prefix(sample_prefix)
 
-                out_h5ad = os.path.join(OUT_H5AD_DIR, f"{sample_id}.counts.h5ad")
+                out_h5ad = os.path.join(out_h5ad_dir, f"{sample_id}.counts.h5ad")
 
                 # skip if already exists
                 if os.path.exists(out_h5ad) and os.path.getsize(out_h5ad) > 0:
@@ -340,16 +353,15 @@ def main():
 
     # 4) write manifest / failures
     man = pd.DataFrame(manifest_rows)
-    man.to_csv(MANIFEST_TSV, sep="\t", index=False)
-    print(f"\n[OK] manifest -> {MANIFEST_TSV}")
+    man.to_csv(manifest_tsv, sep="\t", index=False)
+    print(f"\n[OK] manifest -> {manifest_tsv}")
     print(f"[OK] wrote h5ad: {wrote}")
 
     if len(fail_rows) > 0:
         fails = pd.DataFrame(fail_rows)
-        fails.to_csv(FAIL_TSV, sep="\t", index=False)
-        print(f"[WARN] failures -> {FAIL_TSV}  (n={len(fail_rows)})")
+        fails.to_csv(fail_tsv, sep="\t", index=False)
+        print(f"[WARN] failures -> {fail_tsv}  (n={len(fail_rows)})")
 
 
 if __name__ == "__main__":
     main()
-

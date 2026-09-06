@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = Path(os.environ.get("COQ_SNRNA_H5AD", "analysis_input.h5ad"))
 METADATA = ROOT / "metadata" / "cell_metadata.tsv.gz"
 DOTPLOT_FIGURE = ROOT / "figures" / "Fig08_COQ_pathway_dotplot.png"
-DONOR_FIGURE = ROOT / "figures" / "Fig09_COQ8A_donor_boxplot.png"
+DONOR_FIGURE = ROOT / "figures" / "Fig09_COQ8A_muscle_lineage.png"
 PSEUDOBULK_TABLE = ROOT / "tables" / "COQ_donor_pseudobulk.tsv.gz"
 STATISTICS_TABLE = ROOT / "tables" / "COQ_statistics.tsv"
 
@@ -34,7 +34,8 @@ GENES = [
     "PDSS1", "PDSS2", "COQ2", "COQ3", "COQ4", "COQ5", "COQ6",
     "COQ7", "COQ8A", "COQ8B", "COQ9", "COQ10A", "COQ10B",
 ]
-CELL_TYPES = ["MuSC", "Type I", "Type II", "Specialized MF"]
+PATHWAY_CELL_TYPES = ["MuSC", "Type I", "Type II", "Specialized MF"]
+CELL_TYPES = list(PATHWAY_CELL_TYPES)
 GROUPS = ["Young", "Older, BI=100", "Older, BI<100"]
 COMPARISONS = GROUPS[1:]
 COLORS = {
@@ -166,10 +167,19 @@ def calculate_statistics(pseudobulk: pd.DataFrame) -> pd.DataFrame:
                     }
                 )
     statistics = pd.DataFrame(rows)
-    valid = statistics["p_value_mann_whitney"].notna()
-    statistics.loc[valid, "q_value_bh"] = bh_fdr(
-        statistics.loc[valid, "p_value_mann_whitney"]
-    )
+    # Each gene-by-cell-type hypothesis has two prespecified older-versus-young
+    # contrasts. BH correction is applied to those two contrasts only; genes
+    # and cell types are not pooled into one multiplicity family.
+    statistics["p_adjusted_bh_within_gene_celltype"] = np.nan
+    for _, index in statistics.groupby(["gene", "cell_type"], sort=False).groups.items():
+        index = list(index)
+        valid_index = statistics.loc[index].index[
+            statistics.loc[index, "p_value_mann_whitney"].notna()
+        ]
+        if len(valid_index):
+            statistics.loc[valid_index, "p_adjusted_bh_within_gene_celltype"] = bh_fdr(
+                statistics.loc[valid_index, "p_value_mann_whitney"]
+            )
     return statistics
 
 
@@ -187,16 +197,16 @@ def make_figure(pseudobulk: pd.DataFrame, statistics: pd.DataFrame) -> None:
 
     # Standalone pathway dot plot for legibility after journal-page reduction.
     fig, ax = plt.subplots(figsize=(8.8, 6.8), constrained_layout=True)
-    plot = statistics.copy()
+    plot = statistics.loc[statistics["cell_type"].isin(PATHWAY_CELL_TYPES)].copy()
     plot["column"] = plot["cell_type"] + "\n" + plot["comparison"].str.replace(" vs Young", "", regex=False)
-    columns = [f"{cell_type}\n{comparison}" for cell_type in CELL_TYPES for comparison in COMPARISONS]
+    columns = [f"{cell_type}\n{comparison}" for cell_type in PATHWAY_CELL_TYPES for comparison in COMPARISONS]
     x_map = {label: index for index, label in enumerate(columns)}
     y_map = {gene: len(GENES) - index - 1 for index, gene in enumerate(GENES)}
     finite_fc = np.abs(plot["log2_fold_change"].dropna())
     color_limit = max(1.0, float(np.nanpercentile(finite_fc, 95))) if len(finite_fc) else 1.0
-    significance = -np.log10(plot["p_value_mann_whitney"].clip(lower=1e-12))
+    significance = -np.log10(plot["p_adjusted_bh_within_gene_celltype"].clip(lower=1e-12))
     sizes = 22 + 33 * significance.clip(upper=4)
-    is_significant = plot["p_value_mann_whitney"].lt(0.05).fillna(False)
+    is_significant = plot["p_adjusted_bh_within_gene_celltype"].lt(0.05).fillna(False)
     edge_colors = np.where(is_significant, "#9B1B67", "#5A5A5A")
     edge_widths = np.where(is_significant, 1.25, 0.35)
 
@@ -210,7 +220,7 @@ def make_figure(pseudobulk: pd.DataFrame, statistics: pd.DataFrame) -> None:
         edgecolor=edge_colors, linewidth=edge_widths, zorder=2,
     )
     for _, row in plot.iterrows():
-        symbol = p_symbol(float(row["p_value_mann_whitney"]))
+        symbol = p_symbol(float(row["p_adjusted_bh_within_gene_celltype"]))
         if symbol:
             ax.text(x_map[row["column"]] + 0.18, y_map[row["gene"]] + 0.18, symbol,
                     ha="center", va="center", fontsize=10.0, fontweight="bold",
@@ -232,62 +242,68 @@ def make_figure(pseudobulk: pd.DataFrame, statistics: pd.DataFrame) -> None:
     ]
     size_handles.append(plt.Line2D([], [], marker="$*$", linestyle="", color="#9B1B67",
                                    label="P < 0.05", markersize=9))
-    ax.legend(handles=size_handles, title="Nominal P", frameon=False,
+    ax.legend(handles=size_handles, title="Adjusted P", frameon=False,
               loc="upper left", bbox_to_anchor=(1.01, 0.34), fontsize=9.5, title_fontsize=10.0)
     DOTPLOT_FIGURE.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(DOTPLOT_FIGURE, dpi=500, bbox_inches="tight", facecolor="white")
     plt.close(fig)
 
-    # Standalone donor plot with larger type and no embedded methods paragraph.
-    fig, ax2 = plt.subplots(figsize=(8.0, 5.8), constrained_layout=True)
+    # Focused muscle-lineage panel with conventional box plots and all donor
+    # points. Brackets are reserved for BH-adjusted P < 0.05.
+    fig, ax2 = plt.subplots(figsize=(8.6, 5.5), constrained_layout=True)
     coq8a = pseudobulk.loc[pseudobulk["gene"].eq("COQ8A")].copy()
-    young_means = coq8a.loc[coq8a["group"].eq("Young")].groupby("cell_type")["cpm"].mean()
-    coq8a["log10_fold_change"] = coq8a.apply(
-        lambda row: np.log10((row["cpm"] + PSEUDOCOUNT_CPM)
-                             / (young_means[row["cell_type"]] + PSEUDOCOUNT_CPM)), axis=1)
-    offsets = [-0.28, 0.0, 0.28]
+    figure_cell_types = PATHWAY_CELL_TYPES
+    offsets = [-0.24, 0.0, 0.24]
     positions: dict[tuple[str, str], float] = {}
-    for cell_index, cell_type in enumerate(CELL_TYPES):
+    for cell_index, cell_type in enumerate(figure_cell_types):
         for group_index, group in enumerate(GROUPS):
-            position = cell_index * 1.7 + offsets[group_index]
+            position = cell_index * 1.18 + offsets[group_index]
             positions[(cell_type, group)] = position
             values = coq8a.loc[
-                coq8a["cell_type"].eq(cell_type) & coq8a["group"].eq(group), "log10_fold_change"
+                coq8a["cell_type"].eq(cell_type) & coq8a["group"].eq(group), "log1p_cpm"
             ].dropna().to_numpy()
             if not len(values):
                 continue
-            box = ax2.boxplot(
-                [values], positions=[position], widths=0.25, patch_artist=True, showfliers=False,
-                medianprops={"color": "black", "linewidth": 1.0},
-                boxprops={"facecolor": COLORS[group], "alpha": 0.30, "edgecolor": COLORS[group]},
-                whiskerprops={"color": COLORS[group], "linewidth": 0.8},
-                capprops={"color": COLORS[group], "linewidth": 0.8})
-            del box
-            # Fixed horizontal spreading makes every donor visible, including
-            # donors with identical zero CPM values.
-            jitter = np.linspace(-0.11, 0.11, len(values)) if len(values) > 1 else np.zeros(1)
-            ax2.scatter(np.full(len(values), position) + jitter, values, s=20,
-                        color=COLORS[group], edgecolor="white", linewidth=0.35, zorder=3)
+            ax2.boxplot(
+                [values], positions=[position], widths=0.20, patch_artist=True,
+                showfliers=False,
+                medianprops={"color": "#222222", "linewidth": 1.4},
+                boxprops={"facecolor": COLORS[group], "alpha": 0.28,
+                          "edgecolor": COLORS[group], "linewidth": 1.1},
+                whiskerprops={"color": COLORS[group], "linewidth": 1.0},
+                capprops={"color": COLORS[group], "linewidth": 1.0},
+            )
+            jitter = np.linspace(-0.075, 0.075, len(values)) if len(values) > 1 else np.zeros(1)
+            ax2.scatter(np.full(len(values), position) + jitter, values, s=31,
+                        color=COLORS[group], edgecolor="white", linewidth=0.50, zorder=3)
 
-        ymax = coq8a.loc[coq8a["cell_type"].eq(cell_type), "log10_fold_change"].max()
+        ymax = coq8a.loc[coq8a["cell_type"].eq(cell_type), "log1p_cpm"].max()
         for comp_index, comparison in enumerate(COMPARISONS):
             row = statistics.loc[
                 statistics["cell_type"].eq(cell_type)
                 & statistics["gene"].eq("COQ8A")
                 & statistics["comparison"].eq(f"{comparison} vs Young")].iloc[0]
-            p_value = float(row["p_value_mann_whitney"])
-            label = f"{p_symbol(p_value)}  P={p_value:.3g}" if p_symbol(p_value) else f"P={p_value:.3g}"
-            add_bracket(ax2, positions[(cell_type, "Young")], positions[(cell_type, comparison)],
-                        ymax + 0.18 + 0.22 * comp_index, label)
+            adjusted_p = float(row["p_adjusted_bh_within_gene_celltype"])
+            if np.isfinite(adjusted_p) and adjusted_p < 0.05:
+                add_bracket(
+                    ax2,
+                    positions[(cell_type, "Young")],
+                    positions[(cell_type, comparison)],
+                    ymax + 0.12 + comp_index * 0.28,
+                    f"adjusted P={adjusted_p:.3g}",
+                )
 
-    ax2.axhline(0, color="#777777", linewidth=0.7, linestyle="--")
-    ax2.set_xticks([index * 1.7 for index in range(len(CELL_TYPES))], CELL_TYPES, rotation=15, ha="right")
-    ax2.tick_params(axis="both", labelsize=11.0)
-    ax2.set_ylabel("COQ8A expression\nlog10 fold change relative to young mean", fontsize=12.0)
+    ax2.set_xticks([index * 1.18 for index in range(len(figure_cell_types))], figure_cell_types)
+    ax2.tick_params(axis="both", labelsize=11.5)
+    ax2.set_ylabel("COQ8A expression\n(log1p CPM)", fontsize=12.5)
+    ax2.set_ylim(bottom=-0.22)
+    ax2.yaxis.grid(True, color="#E6E6E6", linewidth=0.7)
+    ax2.set_axisbelow(True)
     ax2.spines[["top", "right"]].set_visible(False)
     handles = [plt.Line2D([], [], marker="o", linestyle="", color=COLORS[group], label=group, markersize=5)
                for group in GROUPS]
-    ax2.legend(handles=handles, frameon=False, fontsize=10.0, loc="lower left")
+    ax2.legend(handles=handles, frameon=False, fontsize=10.0, loc="upper center",
+               bbox_to_anchor=(0.5, 1.02), ncol=3, columnspacing=1.4, handletextpad=0.4)
     fig.savefig(DONOR_FIGURE, dpi=500, bbox_inches="tight", facecolor="white")
     plt.close(fig)
 
@@ -309,7 +325,7 @@ def main() -> None:
 
     result = statistics.loc[
         statistics["gene"].eq("COQ8A"),
-        ["cell_type", "comparison", "n_young", "n_older", "p_value_mann_whitney", "q_value_bh"]]
+        ["cell_type", "comparison", "n_young", "n_older", "p_value_mann_whitney", "p_adjusted_bh_within_gene_celltype"]]
     print(result.to_string(index=False))
     print(f"Figures: {DOTPLOT_FIGURE}; {DONOR_FIGURE}")
     print(f"Tables: {PSEUDOBULK_TABLE}; {STATISTICS_TABLE}")
@@ -317,4 +333,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

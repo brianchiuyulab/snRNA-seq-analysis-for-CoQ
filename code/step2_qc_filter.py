@@ -22,19 +22,11 @@ So we KEEP cells with:
 
 import os
 import glob
+import argparse
 import numpy as np
 import pandas as pd
 import anndata as ad
 import scipy.sparse as sp
-
-# -------------------------
-# Paths (Windows-safe, use forward slashes)
-# -------------------------
-BASE = os.environ.get("COQ_SNRNA_DATA_ROOT", os.path.join(os.getcwd(), "Data_raw"))
-IN_GLOB = os.path.join(BASE, "step1_out_v2", "counts_h5ad", "*.counts.h5ad")
-OUT_ROOT = os.path.join(BASE, "step2_out")
-OUT_QC_DIR = os.path.join(OUT_ROOT, "qc_h5ad")
-OUT_SUMMARY = os.path.join(OUT_ROOT, "qc_summary.tsv")
 
 # -------------------------
 # QC thresholds reported in the source article and its Reporting Summary.
@@ -55,17 +47,30 @@ def to_csr(X):
     return sp.csr_matrix(X)
 
 def main():
-    ensure_dir(OUT_QC_DIR)
+    parser = argparse.ArgumentParser(description="Calculate per-nucleus QC metrics and apply fixed filters.")
+    parser.add_argument(
+        "--base",
+        default=os.environ.get("COQ_SNRNA_DATA_ROOT", os.path.join(os.getcwd(), "Data_raw")),
+        help="Data_raw directory containing step1_out_v2/.",
+    )
+    parser.add_argument("--min-genes", type=int, default=MIN_GENES)
+    parser.add_argument("--min-counts", type=int, default=MIN_COUNTS)
+    parser.add_argument("--max-pct-mt", type=float, default=MAX_PCT_MT)
+    args = parser.parse_args()
 
-    if not os.path.exists(BASE):
-        print(f"Error: Base path not found: {BASE}")
-        return
+    base = os.path.abspath(args.base)
+    in_glob = os.path.join(base, "step1_out_v2", "counts_h5ad", "*.counts.h5ad")
+    out_root = os.path.join(base, "step2_out")
+    out_qc_dir = os.path.join(out_root, "qc_h5ad")
+    out_summary = os.path.join(out_root, "qc_summary.tsv")
+    ensure_dir(out_qc_dir)
 
-    fs = sorted(glob.glob(IN_GLOB))
+    if not os.path.exists(base):
+        raise FileNotFoundError(f"Base path not found: {base}")
+
+    fs = sorted(glob.glob(in_glob))
     if len(fs) == 0:
-        print("Error: No input files found.")
-        print(f"Looking in: {IN_GLOB}")
-        return
+        raise FileNotFoundError(f"No input files found: {in_glob}")
 
     rows = []
 
@@ -105,16 +110,16 @@ def main():
 
         # ---- Filtering ----
         keep = (
-            (a.obs["n_genes_by_counts"].values >= MIN_GENES) &
-            (a.obs["total_counts"].values >= MIN_COUNTS) &
-            (a.obs["pct_counts_mt"].values <= MAX_PCT_MT)
+            (a.obs["n_genes_by_counts"].values >= args.min_genes) &
+            (a.obs["total_counts"].values >= args.min_counts) &
+            (a.obs["pct_counts_mt"].values <= args.max_pct_mt)
         )
 
         n0 = int(a.n_obs)
         a_qc = a[keep].copy()
         n1 = int(a_qc.n_obs)
 
-        out = os.path.join(OUT_QC_DIR, f"{sample}.qc.h5ad")
+        out = os.path.join(out_qc_dir, f"{sample}.qc.h5ad")
         a_qc.write_h5ad(out)
 
         diff = n0 - n1
@@ -125,15 +130,14 @@ def main():
             "sample_id": sample,
             "n_cells_before": n0,
             "n_cells_after": n1,
-            "min_genes": MIN_GENES,
-            "min_counts": MIN_COUNTS,
-            "max_pct_mt": MAX_PCT_MT,
+            "min_genes": args.min_genes,
+            "min_counts": args.min_counts,
+            "max_pct_mt": args.max_pct_mt,
             "mt_genes_found": bool(mt_mask.any()),
         })
 
-    pd.DataFrame(rows).to_csv(OUT_SUMMARY, sep="\t", index=False)
-    print(f"[OK] summary -> {OUT_SUMMARY}")
+    pd.DataFrame(rows).to_csv(out_summary, sep="\t", index=False)
+    print(f"[OK] summary -> {out_summary}")
 
 if __name__ == "__main__":
     main()
-

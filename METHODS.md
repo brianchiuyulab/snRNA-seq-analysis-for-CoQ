@@ -66,9 +66,9 @@ Donors aged 46 years or younger were classified as young. Donors aged 74 years
 or older were divided by functional status into Barthel Index 100 and Barthel
 Index <100 groups. Each older group was compared with the young group using a
 two-sided Mann-Whitney U test on donor-level log1p(CPM), with the donor as the
-independent experimental unit. COQ8A fold change for visualization was
-calculated for each donor as log10[(CPM + 0.1)/(mean young CPM + 0.1)] within
-each cell type. Exact nominal P values are reported in the figure and complete
-statistics table; Benjamini-Hochberg q values across the CoQ gene-cell-type
-comparisons are also provided in the table.
-
+independent experimental unit. For each gene-by-cell-type hypothesis, the two
+prespecified older-versus-young P values were adjusted together using the
+Benjamini-Hochberg method; genes and cell types were not pooled into one
+multiplicity family. The COQ pathway dot plot encodes these adjusted P values.
+The focused COQ8A panel displays donor-level log1p(CPM) as box plots with all
+donor points overlaid; brackets are shown only when adjusted P <0.05.
