@@ -28,10 +28,9 @@ Data_raw/step5_out_v21/annotated_paper_cluster_level_v21.h5ad
 3. `step2_scrublet.py` applies Scrublet independently to each library with at
    least 200 QC-passing nuclei. A total of 2,634 predicted doublets were flagged
    and excluded from marker and donor-level analyses.
-4. `step3_harmony_cluster.py` performs counts-per-10,000 normalization, log1p
-   transformation, selection of 3,000 highly variable genes, regression of UMI
-   count and mitochondrial fraction, scaling, 50-component PCA and Harmony
-   correction. The retained final graph uses 30 Harmony-corrected components,
+4. `step3_harmony_cluster.py` preserves the complete count matrix and normalized
+   transcriptome, while fitting regression, PCA and Harmony on 3,000 highly
+   variable genes. The retained final graph uses 30 Harmony-corrected components,
    30 nearest neighbours, Louvain resolution 2.0, random seed 0 and UMAP.
 5. `step4_rank_final_clusters.py` ranks positive markers for each of the 34 final
    Louvain clusters using a cluster-versus-rest Wilcoxon test. Genes must be
@@ -47,6 +46,10 @@ Cell types were assigned manually from ranked cluster markers, canonical marker
 panels, UMAP structure and the source atlas annotation framework. Ambiguous
 clusters were retained as unresolved rather than assigned to an unsupported
 lineage.
+
+The final 30-neighbour, resolution-2.0 graph is the graph stored in the retained
+project object. It is a documented reanalysis setting rather than an exact copy
+of the source atlas global clustering, which reported a 10-neighbour graph.
 
 ## Donor-level CoQ analysis
 
@@ -71,7 +74,25 @@ Install the recorded Python environment:
 pip install -r requirements.txt
 ```
 
-Set the H5AD path and rebuild the final tables and figures:
+To rebuild preprocessing from the downloaded count-matrix archives, place
+`Table1.xlsx` and `Process_version/` under the project root and run:
+
+```powershell
+$env:COQ_SNRNA_PROJECT_ROOT = "D:\path\to\project"
+python .\code\step1_import_counts.py
+$env:COQ_SNRNA_DATA_ROOT = "D:\path\to\project\Data_raw"
+python .\code\step2_qc_filter.py
+python .\code\step2_scrublet.py --base $env:COQ_SNRNA_DATA_ROOT
+python .\code\step3_harmony_cluster.py --base $env:COQ_SNRNA_DATA_ROOT `
+  --remove_doublets 0 --hvg_n 3000 --pca_n_comps 50 --use_pcs 30 `
+  --n_neighbors 30 --cluster_method louvain --cluster_resolution 2.0 --seed 0
+```
+
+The retained clustering includes all QC-passing nuclei. Predicted doublets are
+flagged in the object and excluded from marker ranking, annotation summaries and
+donor-level CoQ analyses.
+
+Set the H5AD path and rebuild the annotation tables and final figures:
 
 ```powershell
 .\run_release.ps1 -H5ad "D:\path\to\annotated_paper_cluster_level_v21.h5ad"
@@ -81,17 +102,19 @@ The source object must contain raw UMI counts in `layers['counts']`, normalized
 log1p counts-per-10,000 in `raw.X`, final cluster labels in `obs['louvain_r2']`,
 and UMAP coordinates in `obsm['X_umap_r2']`.
 
-The four-slide figure summary is available locally at
-`presentation/snRNA_analysis_summary_final.pptx`.
+The six-slide figure summary is available locally at
+`presentation/snRNA_analysis_summary_6fig_final.pptx`.
 
 ## Outputs
 
 Figures:
 
 - `figures/Fig01_QC_overview.png`
-- `figures/Fig02_Annotation_UMAP.png`
-- `figures/Fig03_Celltype_marker_dotplot.png`
-- `figures/Fig04_COQ_donor_analysis.png`
+- `figures/Fig02_Celltype_annotation_UMAP.png`
+- `figures/Fig03_Louvain_clusters_UMAP.png`
+- `figures/Fig04_Celltype_marker_dotplot.png`
+- `figures/Fig05_COQ_pathway_dotplot.png`
+- `figures/Fig06_COQ8A_donor_boxplot.png`
 
 Tables:
 
