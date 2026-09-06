@@ -22,12 +22,18 @@ and donor-level expression analysis.
 Counts were normalized to 10,000 counts per nucleus and log1p transformed. The
 3,000 most highly variable genes were selected. Total UMI count and
 mitochondrial fraction were regressed out, genes were scaled, and 50 principal
-components were calculated. Batch correction was performed with Harmony using
-library as the batch variable. The retained final analysis used the first 30
+components were calculated on the highly variable genes. The complete 60,609
+gene count matrix and normalized transcriptome were retained for marker and
+pathway analyses. Batch correction was performed with Harmony using library as
+the batch variable. The retained final analysis used the first 30
 Harmony-corrected components to construct a 30-nearest-neighbour graph. Louvain
 clustering was performed at resolution 2.0 with random seed 0, producing 34
-clusters, and the same graph was visualized with UMAP. These are the parameters
-stored in the retained project object.
+clusters, and the same graph was visualized with UMAP.
+
+These parameters describe the graph stored in the retained project object. The
+source atlas reported a 10-neighbour graph for its global Scanpy analysis; the
+30-neighbour graph and resolution 2.0 used here therefore represent a documented
+reanalysis setting rather than an exact reconstruction of the source clustering.
 
 ## Marker identification and cell-type annotation
 
