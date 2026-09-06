@@ -92,11 +92,17 @@ def try_cluster(adata: ad.AnnData, method: str, resolution: float, seed: int) ->
     method: 'louvain' or 'leiden'
     """
     if method == "louvain":
-        sc.tl.louvain(adata, resolution=resolution, random_state=seed, key_added="louvain")
-        return "louvain"
+        sc.tl.louvain(
+            adata, resolution=resolution, random_state=seed,
+            neighbors_key="neighbors_r2", key_added="louvain_r2",
+        )
+        return "louvain_r2"
     if method == "leiden":
-        sc.tl.leiden(adata, resolution=resolution, random_state=seed, key_added="leiden")
-        return "leiden"
+        sc.tl.leiden(
+            adata, resolution=resolution, random_state=seed,
+            neighbors_key="neighbors_r2", key_added="leiden_r2",
+        )
+        return "leiden_r2"
     return None
 
 
@@ -201,6 +207,9 @@ def main():
     print("[NORM] normalize_total(target_sum=1e4) + log1p")
     sc.pp.normalize_total(adata, target_sum=1e4)
     sc.pp.log1p(adata)
+    # Preserve the complete normalized transcriptome for marker testing and
+    # downstream pathway analysis. Dimensionality reduction is fit on HVGs only.
+    adata.raw = adata
 
     # try reduce memory
     try:
@@ -217,8 +226,8 @@ def main():
         subset=False,
     )
     n_hvg = int(adata.var["highly_variable"].sum())
-    adata = adata[:, adata.var["highly_variable"]].copy()
-    print(f"[HVG] kept {n_hvg} genes; now genes={adata.n_vars:,}")
+    analysis = adata[:, adata.var["highly_variable"]].copy()
+    print(f"[HVG] using {n_hvg} genes for PCA/Harmony; full object retains {adata.n_vars:,} genes")
 
     # 7) regress out
     regressors = ["total_counts", "pct_counts_mt"]
@@ -229,42 +238,59 @@ def main():
         print("[REGRESS] skipped")
     else:
         print(f"[REGRESS] regress_out {regressors}")
-        sc.pp.regress_out(adata, keys=regressors)
+        sc.pp.regress_out(analysis, keys=regressors)
 
     # 8) scale
     if args.skip_scale == 1:
         print("[SCALE] skipped")
     else:
         print("[SCALE] scale()")
-        sc.pp.scale(adata)
+        sc.pp.scale(analysis)
 
     # 9) PCA + elbow plot
     print(f"[PCA] n_comps={args.pca_n_comps}")
-    sc.tl.pca(adata, n_comps=args.pca_n_comps, svd_solver="arpack", random_state=args.seed)
+    sc.tl.pca(analysis, n_comps=args.pca_n_comps, svd_solver="arpack", random_state=args.seed)
 
     # save PCA variance ratio plot with clean filename
     # NOTE: scanpy saves under sc.settings.figdir automatically
-    sc.pl.pca_variance_ratio(adata, n_pcs=args.pca_n_comps, log=True, show=False, save=None)
+    sc.pl.pca_variance_ratio(analysis, n_pcs=args.pca_n_comps, log=True, show=False, save=None)
     # Also save a copy with a deterministic filename
     # (matplotlib backend used by scanpy might already save; we keep explicit copy)
     # Scanpy supplies the PCA plot filename in the configured figure directory.
 
     # 10) Harmony
     print("[HARMONY] integrating by batch='sample_id'")
-    harmony_key = run_harmony(adata, batch_key="batch", basis="X_pca")
-    use_pcs = min(args.use_pcs, adata.obsm[harmony_key].shape[1])
-    adata.obsm["X_harmony_pcs"] = adata.obsm[harmony_key][:, :use_pcs].astype(np.float32)
-    print(f"[HARMONY] {harmony_key} -> X_harmony_pcs shape={adata.obsm['X_harmony_pcs'].shape}")
+    harmony_key = run_harmony(analysis, batch_key="batch", basis="X_pca")
+    use_pcs = min(args.use_pcs, analysis.obsm[harmony_key].shape[1])
+    analysis.obsm["X_rep"] = analysis.obsm[harmony_key][:, :use_pcs].astype(np.float32)
+    print(f"[HARMONY] {harmony_key} -> X_rep shape={analysis.obsm['X_rep'].shape}")
 
     # 11) neighbors + UMAP
-    print(f"[NEIGHBORS] n_neighbors={args.n_neighbors} using X_harmony_pcs")
-    sc.pp.neighbors(adata, n_neighbors=args.n_neighbors, use_rep="X_harmony_pcs")
+    print(f"[NEIGHBORS] n_neighbors={args.n_neighbors} using X_rep")
+    sc.pp.neighbors(
+        analysis, n_neighbors=args.n_neighbors, use_rep="X_rep",
+        random_state=args.seed, key_added="neighbors_r2",
+    )
     print("[UMAP] computing UMAP ...")
-    sc.tl.umap(adata, min_dist=args.umap_min_dist, spread=args.umap_spread, random_state=args.seed)
+    sc.tl.umap(
+        analysis, min_dist=args.umap_min_dist, spread=args.umap_spread,
+        random_state=args.seed, neighbors_key="neighbors_r2",
+    )
+
+    # Transfer the fitted representation to the complete-gene object. This is
+    # the storage contract used by the retained analysis H5AD.
+    adata.obsm["X_rep"] = analysis.obsm["X_rep"].copy()
+    adata.obsm["X_umap"] = analysis.obsm["X_umap"].copy()
+    adata.obsm["X_umap_r2"] = analysis.obsm["X_umap"].copy()
+    adata.obsp["neighbors_r2_connectivities"] = analysis.obsp["neighbors_r2_connectivities"].copy()
+    adata.obsp["neighbors_r2_distances"] = analysis.obsp["neighbors_r2_distances"].copy()
+    adata.uns["neighbors_r2"] = analysis.uns["neighbors_r2"].copy()
+    adata.uns["umap"] = analysis.uns["umap"].copy()
 
     if args.run_tsne == 1:
         print("[tSNE] computing tSNE ...")
-        sc.tl.tsne(adata, use_rep="X_harmony_pcs", random_state=args.seed)
+        sc.tl.tsne(analysis, use_rep="X_rep", random_state=args.seed)
+        adata.obsm["X_tsne"] = analysis.obsm["X_tsne"].copy()
 
     # ---- checkpoint after UMAP ----
     ckpt_h5ad = os.path.join(out_root, "merged_harmony_precluster.h5ad")
@@ -276,14 +302,14 @@ def main():
     if args.cluster_method != "none":
         print(f"[CLUSTER] requested method={args.cluster_method}, res={args.cluster_resolution}")
         try:
-            cluster_key = try_cluster(adata, method=args.cluster_method, resolution=args.cluster_resolution, seed=args.seed)
+            cluster_key = try_cluster(analysis, method=args.cluster_method, resolution=args.cluster_resolution, seed=args.seed)
         except ModuleNotFoundError as e:
             print(f"[WARN] {args.cluster_method} failed (missing module): {e}")
             if args.cluster_method == "louvain":
                 # fallback to leiden
                 try:
                     print("[CLUSTER] fallback to leiden ...")
-                    cluster_key = try_cluster(adata, method="leiden", resolution=args.cluster_resolution, seed=args.seed)
+                    cluster_key = try_cluster(analysis, method="leiden", resolution=args.cluster_resolution, seed=args.seed)
                 except Exception as e2:
                     print(f"[WARN] leiden also failed: {e2}")
             else:
@@ -293,6 +319,11 @@ def main():
             cluster_key = None
     else:
         print("[CLUSTER] skipped by user (--cluster_method none)")
+
+    if cluster_key is not None:
+        adata.obs[cluster_key] = analysis.obs[cluster_key].copy()
+        if cluster_key in analysis.uns:
+            adata.uns[cluster_key] = analysis.uns[cluster_key].copy()
 
     # 13) plots
     print("[PLOTS] saving UMAP plots ...")
@@ -313,7 +344,7 @@ def main():
         "n_cells_before_doublet_filter": int(n0),
         "n_cells_after_doublet_filter": int(n1),
         "remove_doublets": int(args.remove_doublets),
-        "n_genes_after_intersection": int(adata.layers["counts"].shape[1]),
+        "n_genes_after_intersection": int(adata.n_vars),
         "hvg_n_requested": int(args.hvg_n),
         "hvg_n_used": int(n_hvg),
         "hvg_flavor": args.hvg_flavor,
