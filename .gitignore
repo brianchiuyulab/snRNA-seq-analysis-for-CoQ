@@ -1,0 +1,9 @@
+*.h5ad
+metadata/
+tables/
+figures/
+presentation/
+.pptx_build/
+__pycache__/
+*.pyc
+
