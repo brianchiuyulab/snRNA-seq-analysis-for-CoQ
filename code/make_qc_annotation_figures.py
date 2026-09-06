@@ -124,36 +124,37 @@ def make_umap_figure(adata: ad.AnnData, meta: pd.DataFrame) -> None:
     types = meta["cell_type_v22"].astype(str).to_numpy()
     clusters = meta["louvain_r2"].astype(str).to_numpy()
 
-    fig, axes = plt.subplots(1, 2, figsize=(12.5, 5.4), constrained_layout=True)
-    ax = axes[0]
+    fig, ax = plt.subplots(figsize=(7.5, 6.2), constrained_layout=True)
     for cell_type in sorted(pd.unique(types[singlet])):
         mask = singlet & (types == cell_type)
-        ax.scatter(coords[mask, 0], coords[mask, 1], s=0.6, alpha=0.55, color=PALETTE.get(cell_type, "#999999"), rasterized=True, label=cell_type)
-    ax.set(xlabel="UMAP 1", ylabel="UMAP 2", title="Reviewed cell-type annotations")
+        ax.scatter(coords[mask, 0], coords[mask, 1], s=0.85, alpha=0.60,
+                   color=PALETTE.get(cell_type, "#999999"), rasterized=True, label=cell_type)
+    ax.set(xlabel="UMAP 1", ylabel="UMAP 2", title="Cell-type annotations")
+    ax.set_title("Cell-type annotations", fontsize=14.0)
+    ax.set_xlabel("UMAP 1", fontsize=12.0)
+    ax.set_ylabel("UMAP 2", fontsize=12.0)
     ax.set_xticks([]); ax.set_yticks([])
-    ax.legend(markerscale=6, frameon=False, fontsize=7, bbox_to_anchor=(1.01, 1), loc="upper left")
-    panel_label(ax, "A")
+    ax.legend(markerscale=5, frameon=False, fontsize=10.0,
+              bbox_to_anchor=(1.01, 1), loc="upper left")
+    fig.savefig(OUTDIR / "Fig02_Celltype_annotation_UMAP.png", dpi=500, bbox_inches="tight")
+    plt.close(fig)
 
-    ax = axes[1]
+    fig, ax = plt.subplots(figsize=(7.5, 6.2), constrained_layout=True)
     cluster_ids = sorted(pd.unique(clusters[singlet]), key=int)
     cluster_palette = plt.get_cmap("gist_ncar", len(cluster_ids))
     for index, cluster_id in enumerate(cluster_ids):
         mask = singlet & (clusters == cluster_id)
-        ax.scatter(coords[mask, 0], coords[mask, 1], s=0.55, alpha=0.52,
+        ax.scatter(coords[mask, 0], coords[mask, 1], s=0.8, alpha=0.58,
                    color=cluster_palette(index), rasterized=True)
         centre = np.median(coords[mask], axis=0)
-        ax.text(centre[0], centre[1], cluster_id, ha="center", va="center", fontsize=7,
-                bbox=dict(boxstyle="circle,pad=0.18", fc="white", ec="0.25", lw=0.5))
-    ax.set(xlabel="UMAP 1", ylabel="UMAP 2", title="Unsupervised Louvain clusters (resolution 2.0)")
+        ax.text(centre[0], centre[1], cluster_id, ha="center", va="center", fontsize=8.5,
+                bbox=dict(boxstyle="circle,pad=0.18", fc="white", ec="0.25", lw=0.65))
+    ax.set(xlabel="UMAP 1", ylabel="UMAP 2", title="Louvain clusters (resolution 2.0)")
+    ax.set_title("Louvain clusters (resolution 2.0)", fontsize=14.0)
+    ax.set_xlabel("UMAP 1", fontsize=12.0)
+    ax.set_ylabel("UMAP 2", fontsize=12.0)
     ax.set_xticks([]); ax.set_yticks([])
-    panel_label(ax, "B")
-    fig.text(
-        0.5, -0.015,
-        "Harmony-corrected 30-PC representation; 30-neighbour graph; UMAP visualization. "
-        "Predicted doublets are not shown.",
-        ha="center", fontsize=8, color="#333333",
-    )
-    fig.savefig(OUTDIR / "Fig02_Annotation_UMAP.png", dpi=300, bbox_inches="tight")
+    fig.savefig(OUTDIR / "Fig03_Louvain_clusters_UMAP.png", dpi=500, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -192,16 +193,20 @@ def make_marker_dotplot(adata: ad.AnnData, meta: pd.DataFrame) -> None:
         s=7 + 105 * plot["pct_expressing"], c=plot["mean_z_by_gene"],
         cmap="RdBu_r", vmin=-2, vmax=2, edgecolor="0.55", linewidth=0.15,
     )
-    ax.set_xticks(range(len(available)), available, rotation=90, fontsize=8)
-    ax.set_yticks(range(len(CELLTYPE_ORDER)), CELLTYPE_ORDER[::-1], fontsize=8)
+    ax.set_xticks(range(len(available)), available, rotation=90, fontsize=10)
+    ax.set_yticks(range(len(CELLTYPE_ORDER)), CELLTYPE_ORDER[::-1], fontsize=10.5)
     ax.set(xlabel="Marker gene", ylabel="", title="Canonical marker expression by annotated cell type")
+    ax.set_xlabel("Marker gene", fontsize=11.5)
+    ax.set_title("Canonical marker expression by annotated cell type", fontsize=13.0)
     for boundary in (4.5, 8.5, 11.5, 15.5, 17.5, 19.5, 23.5, 25.5):
         ax.axvline(boundary, color="#d9d9d9", linewidth=0.7)
     cbar = fig.colorbar(scatter, ax=ax, pad=0.01, shrink=0.65)
-    cbar.set_label("Mean expression z-score by gene")
+    cbar.set_label("Mean expression z-score by gene", fontsize=10.5)
+    cbar.ax.tick_params(labelsize=9.5)
     handles = [plt.scatter([], [], s=4 + 80 * p, facecolor="white", edgecolor="0.4", label=f"{int(p*100)}%") for p in (0.1, 0.5, 0.9)]
-    ax.legend(handles=handles, title="Expressing", frameon=False, bbox_to_anchor=(1.02, 0.18), loc="center left")
-    fig.savefig(OUTDIR / "Fig03_Celltype_marker_dotplot.png", dpi=300, bbox_inches="tight")
+    ax.legend(handles=handles, title="Expressing", frameon=False,
+              bbox_to_anchor=(1.02, 0.18), loc="center left", fontsize=9.5, title_fontsize=10.0)
+    fig.savefig(OUTDIR / "Fig04_Celltype_marker_dotplot.png", dpi=400, bbox_inches="tight")
     plt.close(fig)
 
 
