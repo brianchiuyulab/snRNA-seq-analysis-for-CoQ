@@ -1,15 +1,17 @@
 #!/usr/bin/env python
-"""Donor-level COQ-gene summary using raw UMI counts and v22 annotations.
+"""Donor-level analysis of CoQ-pathway genes in myogenic nuclei.
 
-The figure uses one observation per biological donor and cell type.  Stars mark
-nominal two-sided Mann-Whitney P values; global BH-FDR is retained in the table
-and explicitly disclosed in the figure.
+Raw UMI counts are summed within each donor and annotated cell type. Every
+observed donor-cell-type combination is retained; no minimum nucleus count is
+imposed. Donors are classified as young (age <=46 years), older with Barthel
+Index 100, or older with Barthel Index <100. Statistical tests use biological
+donors as independent observations.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 import os
+from pathlib import Path
 
 import anndata as ad
 import matplotlib.pyplot as plt
@@ -22,193 +24,289 @@ from scipy.stats import mannwhitneyu
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = Path(os.environ.get("COQ_SNRNA_H5AD", "analysis_input.h5ad"))
-META = ROOT / "metadata" / "cell_metadata.tsv.gz"
-FIGDIR = ROOT / "figures"
-TABLEDIR = ROOT / "tables"
+METADATA = ROOT / "metadata" / "cell_metadata.tsv.gz"
+FIGURE = ROOT / "figures" / "Fig04_COQ_donor_analysis.png"
+PSEUDOBULK_TABLE = ROOT / "tables" / "COQ_donor_pseudobulk.tsv.gz"
+STATISTICS_TABLE = ROOT / "tables" / "COQ_statistics.tsv"
 
-GENES = ["PDSS1", "PDSS2", "COQ2", "COQ3", "COQ4", "COQ5", "COQ6", "COQ7",
-         "COQ8A", "COQ8B", "COQ9", "COQ10A", "COQ10B"]
-CELLTYPES = ["Type I", "Type II", "Specialized MF", "MuSC"]
-MIN_NUCLEI = 30
+GENES = [
+    "PDSS1", "PDSS2", "COQ2", "COQ3", "COQ4", "COQ5", "COQ6",
+    "COQ7", "COQ8A", "COQ8B", "COQ9", "COQ10A", "COQ10B",
+]
+CELL_TYPES = ["MuSC", "Type I", "Type II", "Specialized MF"]
+GROUPS = ["Young", "Older, BI=100", "Older, BI<100"]
+COMPARISONS = GROUPS[1:]
+COLORS = {
+    "Young": "#4C78A8",
+    "Older, BI=100": "#F2A541",
+    "Older, BI<100": "#D64B4B",
+}
 PSEUDOCOUNT_CPM = 0.1
+
+
+def classify_group(age: pd.Series, barthel: pd.Series) -> pd.Series:
+    age = pd.to_numeric(age, errors="coerce")
+    barthel = pd.to_numeric(barthel, errors="coerce")
+    group = pd.Series(pd.NA, index=age.index, dtype="object")
+    group.loc[age <= 46] = "Young"
+    older = age >= 74
+    group.loc[older & barthel.eq(100)] = "Older, BI=100"
+    group.loc[older & barthel.lt(100)] = "Older, BI<100"
+    return group
 
 
 def bh_fdr(values: pd.Series) -> np.ndarray:
     p = values.to_numpy(float)
     order = np.argsort(p)
     ranked = p[order]
-    q_ranked = np.minimum.accumulate((ranked * len(p) / np.arange(1, len(p) + 1))[::-1])[::-1]
-    q = np.empty_like(q_ranked)
-    q[order] = np.clip(q_ranked, 0, 1)
-    return q
+    adjusted = np.minimum.accumulate(
+        (ranked * len(p) / np.arange(1, len(p) + 1))[::-1]
+    )[::-1]
+    result = np.empty_like(adjusted)
+    result[order] = np.clip(adjusted, 0, 1)
+    return result
 
 
-def p_stars(p: float) -> str:
-    if not np.isfinite(p): return ""
-    if p < 0.001: return "***"
-    if p < 0.01: return "**"
-    if p < 0.05: return "*"
+def p_symbol(p_value: float) -> str:
+    if not np.isfinite(p_value):
+        return ""
+    if p_value < 0.001:
+        return "***"
+    if p_value < 0.01:
+        return "**"
+    if p_value < 0.05:
+        return "*"
     return ""
 
 
-def build_pseudobulk(adata: ad.AnnData, meta: pd.DataFrame) -> pd.DataFrame:
-    available = [gene for gene in GENES if gene in adata.var_names]
-    indices = adata.var_names.get_indexer(available)
-    counts = adata.layers["counts"][:, indices]
-    if not sp.issparse(counts):
-        counts = sp.csr_matrix(counts)
-    else:
-        counts = counts.tocsr()
+def build_pseudobulk(adata: ad.AnnData, metadata: pd.DataFrame) -> pd.DataFrame:
+    available_genes = [gene for gene in GENES if gene in adata.var_names]
+    gene_indices = adata.var_names.get_indexer(available_genes)
+    counts = adata.layers["counts"][:, gene_indices]
+    counts = counts.tocsr() if sp.issparse(counts) else sp.csr_matrix(counts)
 
     eligible = (
-        meta["is_singlet_v22"].astype(bool)
-        & meta["primary_analysis_include_v22"].astype(bool)
-        & meta["cell_type_v22"].isin(CELLTYPES)
-    ).to_numpy()
-    sub = meta.loc[eligible, ["subject_id", "cell_type_v22", "Age", "age_group", "Cohort", "Sex", "total_counts"]].copy()
-    sub["row"] = np.flatnonzero(eligible)
+        metadata["is_singlet_v22"].astype(bool)
+        & metadata["primary_analysis_include_v22"].astype(bool)
+        & metadata["cell_type_v22"].isin(CELL_TYPES)
+    )
+    selected = metadata.loc[
+        eligible,
+        ["subject_id", "cell_type_v22", "Age", "Barthel_Index_BI", "total_counts"],
+    ].copy()
+    selected["analysis_group"] = classify_group(selected["Age"], selected["Barthel_Index_BI"])
+    selected = selected.loc[selected["analysis_group"].notna()].copy()
+    selected["matrix_row"] = metadata.index.get_indexer(selected.index)
 
     rows: list[dict[str, object]] = []
-    for (subject, celltype), group in sub.groupby(["subject_id", "cell_type_v22"], observed=True):
-        row_idx = group["row"].to_numpy(int)
-        n_nuclei = len(row_idx)
-        if n_nuclei < MIN_NUCLEI:
-            continue
-        gene_counts = np.asarray(counts[row_idx].sum(axis=0)).ravel()
-        library_size = float(group["total_counts"].sum())
+    for (subject, cell_type), block in selected.groupby(
+        ["subject_id", "cell_type_v22"], observed=True
+    ):
+        matrix_rows = block["matrix_row"].to_numpy(int)
+        n_nuclei = len(matrix_rows)
+        gene_counts = np.asarray(counts[matrix_rows].sum(axis=0)).ravel()
+        library_umi = float(block["total_counts"].sum())
         common = {
-            "subject_id": subject, "cell_type": celltype, "n_nuclei": n_nuclei,
-            "library_umi": library_size, "Age": float(group["Age"].iloc[0]),
-            "age_group": str(group["age_group"].iloc[0]), "Cohort": str(group["Cohort"].iloc[0]),
-            "Sex": str(group["Sex"].iloc[0]),
+            "donor": str(subject),
+            "cell_type": str(cell_type),
+            "group": str(block["analysis_group"].iloc[0]),
+            "age": float(block["Age"].iloc[0]),
+            "barthel_index": float(block["Barthel_Index_BI"].iloc[0])
+            if pd.notna(block["Barthel_Index_BI"].iloc[0]) else np.nan,
+            "n_nuclei": n_nuclei,
+            "library_umi": library_umi,
         }
-        for gene, count in zip(available, gene_counts):
-            cpm = float(count / library_size * 1e6) if library_size > 0 else np.nan
-            rows.append({**common, "gene": gene, "count": float(count), "cpm": cpm,
-                         "log2_cpm": float(np.log2(cpm + PSEUDOCOUNT_CPM))})
+        for gene, count in zip(available_genes, gene_counts):
+            cpm = float(count / library_umi * 1e6) if library_umi > 0 else np.nan
+            rows.append(
+                {
+                    **common,
+                    "gene": gene,
+                    "gene_umi": int(count),
+                    "cpm": cpm,
+                    "log1p_cpm": float(np.log1p(cpm)),
+                }
+            )
     return pd.DataFrame(rows)
 
 
-def calculate_stats(long: pd.DataFrame) -> pd.DataFrame:
-    rows = []
-    for celltype in CELLTYPES:
+def calculate_statistics(pseudobulk: pd.DataFrame) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for cell_type in CELL_TYPES:
         for gene in GENES:
-            block = long[(long["cell_type"] == celltype) & (long["gene"] == gene)]
-            young = block.loc[block["age_group"].eq("Young<=46"), "log2_cpm"].dropna().to_numpy()
-            old = block.loc[block["age_group"].eq("Old>=74"), "log2_cpm"].dropna().to_numpy()
-            p = mannwhitneyu(old, young, alternative="two-sided").pvalue if len(old) >= 3 and len(young) >= 3 else np.nan
-            rows.append({
-                "cell_type": celltype, "gene": gene, "n_old": len(old), "n_young": len(young),
-                "mean_cpm_old": block.loc[block["age_group"].eq("Old>=74"), "cpm"].mean(),
-                "mean_cpm_young": block.loc[block["age_group"].eq("Young<=46"), "cpm"].mean(),
-                "mean_log2_cpm": block["log2_cpm"].mean(),
-                "log2fc_old_vs_young": old.mean() - young.mean() if len(old) and len(young) else np.nan,
-                "p_mannwhitney": p,
-            })
-    stats = pd.DataFrame(rows)
-    valid = stats["p_mannwhitney"].notna()
-    stats.loc[valid, "q_bh_global"] = bh_fdr(stats.loc[valid, "p_mannwhitney"])
-    stats["nominal_stars"] = stats["p_mannwhitney"].map(p_stars)
-    stats["fdr_significant"] = stats["q_bh_global"].lt(0.05).fillna(False)
-    return stats
-
-
-def make_figure(long: pd.DataFrame, stats: pd.DataFrame) -> None:
-    plt.rcParams.update({"font.family": "Arial", "font.size": 9, "axes.linewidth": 0.8})
-    fig = plt.figure(figsize=(12.2, 7.2), constrained_layout=True)
-    grid = fig.add_gridspec(1, 2, width_ratios=[1.25, 1])
-    ax = fig.add_subplot(grid[0, 0])
-
-    plot = stats.copy()
-    xmap = {ct: i for i, ct in enumerate(CELLTYPES)}
-    ymap = {gene: len(GENES) - 1 - i for i, gene in enumerate(GENES)}
-    finite_fc = np.abs(plot["log2fc_old_vs_young"].dropna())
-    limit = max(0.5, float(np.nanpercentile(finite_fc, 95))) if len(finite_fc) else 1.0
-    sizes = 22 + 34 * (plot["mean_log2_cpm"] - plot["mean_log2_cpm"].min()) / max(
-        1e-9, plot["mean_log2_cpm"].max() - plot["mean_log2_cpm"].min()
+            block = pseudobulk.loc[
+                pseudobulk["cell_type"].eq(cell_type) & pseudobulk["gene"].eq(gene)
+            ]
+            young = block.loc[block["group"].eq("Young"), "log1p_cpm"].dropna().to_numpy()
+            young_cpm = block.loc[block["group"].eq("Young"), "cpm"].dropna().to_numpy()
+            for comparison in COMPARISONS:
+                older = block.loc[block["group"].eq(comparison), "log1p_cpm"].dropna().to_numpy()
+                older_cpm = block.loc[block["group"].eq(comparison), "cpm"].dropna().to_numpy()
+                if len(young) >= 3 and len(older) >= 3:
+                    p_value = float(mannwhitneyu(young, older, alternative="two-sided").pvalue)
+                else:
+                    p_value = np.nan
+                mean_young = float(np.mean(young_cpm)) if len(young_cpm) else np.nan
+                mean_older = float(np.mean(older_cpm)) if len(older_cpm) else np.nan
+                log2_fc = float(
+                    np.log2((mean_older + PSEUDOCOUNT_CPM) / (mean_young + PSEUDOCOUNT_CPM))
+                ) if np.isfinite(mean_young) and np.isfinite(mean_older) else np.nan
+                rows.append(
+                    {
+                        "cell_type": cell_type,
+                        "gene": gene,
+                        "comparison": f"{comparison} vs Young",
+                        "n_young": len(young),
+                        "n_older": len(older),
+                        "mean_cpm_young": mean_young,
+                        "mean_cpm_older": mean_older,
+                        "log2_fold_change": log2_fc,
+                        "p_value_mann_whitney": p_value,
+                    }
+                )
+    statistics = pd.DataFrame(rows)
+    valid = statistics["p_value_mann_whitney"].notna()
+    statistics.loc[valid, "q_value_bh"] = bh_fdr(
+        statistics.loc[valid, "p_value_mann_whitney"]
     )
+    return statistics
+
+
+def add_bracket(ax, x0: float, x1: float, y: float, text: str) -> None:
+    height = 0.08
+    ax.plot([x0, x0, x1, x1], [y, y + height, y + height, y], color="black", lw=0.8)
+    ax.text((x0 + x1) / 2, y + height + 0.02, text, ha="center", va="bottom", fontsize=7.2)
+
+
+def make_figure(pseudobulk: pd.DataFrame, statistics: pd.DataFrame) -> None:
+    plt.rcParams.update({
+        "font.family": "Arial", "font.size": 8.5, "axes.linewidth": 0.8,
+        "xtick.major.width": 0.8, "ytick.major.width": 0.8,
+    })
+    fig = plt.figure(figsize=(13.2, 8.1), constrained_layout=True)
+    grid = fig.add_gridspec(1, 2, width_ratios=[1.32, 1.0])
+
+    ax = fig.add_subplot(grid[0, 0])
+    plot = statistics.copy()
+    plot["column"] = plot["cell_type"] + "\n" + plot["comparison"].str.replace(" vs Young", "", regex=False)
+    columns = [f"{cell_type}\n{comparison}" for cell_type in CELL_TYPES for comparison in COMPARISONS]
+    x_map = {label: index for index, label in enumerate(columns)}
+    y_map = {gene: len(GENES) - index - 1 for index, gene in enumerate(GENES)}
+    finite_fc = np.abs(plot["log2_fold_change"].dropna())
+    color_limit = max(1.0, float(np.nanpercentile(finite_fc, 95))) if len(finite_fc) else 1.0
+    significance = -np.log10(plot["p_value_mann_whitney"].clip(lower=1e-12))
+    sizes = 22 + 33 * significance.clip(upper=4)
     scatter = ax.scatter(
-        plot["cell_type"].map(xmap), plot["gene"].map(ymap), s=sizes,
-        c=plot["log2fc_old_vs_young"], cmap="RdBu_r", norm=TwoSlopeNorm(vmin=-limit, vcenter=0, vmax=limit),
-        edgecolors=np.where(plot["fdr_significant"], "black", "#666666"),
-        linewidths=np.where(plot["fdr_significant"], 1.7, 0.45), zorder=2,
+        plot["column"].map(x_map), plot["gene"].map(y_map), s=sizes,
+        c=plot["log2_fold_change"], cmap="RdBu_r",
+        norm=TwoSlopeNorm(vmin=-color_limit, vcenter=0, vmax=color_limit),
+        edgecolor="#4d4d4d", linewidth=0.35, zorder=2,
     )
     for _, row in plot.iterrows():
-        if row["nominal_stars"]:
-            ax.text(xmap[row["cell_type"]] + 0.17, ymap[row["gene"]] + 0.16, row["nominal_stars"],
-                    fontsize=8, fontweight="bold", ha="center", va="center")
-    donor_labels = []
-    for ct in CELLTYPES:
-        block = plot[plot["cell_type"] == ct]
-        donor_labels.append(f"{ct}\nY={int(block['n_young'].max())}, O={int(block['n_old'].max())}")
-    ax.set_xticks(range(len(CELLTYPES)), donor_labels)
+        symbol = p_symbol(float(row["p_value_mann_whitney"]))
+        if symbol:
+            ax.text(x_map[row["column"]], y_map[row["gene"]], symbol,
+                    ha="center", va="center", fontsize=7.2, fontweight="bold", color="black")
+    ax.set_xticks(range(len(columns)))
+    ax.set_xticklabels([label.replace("Older, ", "") for label in columns], rotation=43, ha="right", fontsize=7.4)
     ax.set_yticks(range(len(GENES)), GENES[::-1])
-    ax.set_xlim(-0.55, len(CELLTYPES) - 0.45); ax.set_ylim(-0.6, len(GENES) - 0.4)
-    ax.grid(color="#eeeeee", lw=0.6, zorder=0)
-    ax.set_title("COQ pathway genes by cell type", fontsize=13, loc="left")
-    ax.set_xlabel("Donor pseudobulk groups")
-    ax.set_ylabel("")
+    ax.set_xlim(-0.6, len(columns) - 0.4)
+    ax.set_ylim(-0.6, len(GENES) - 0.4)
+    ax.grid(color="#eeeeee", linewidth=0.6, zorder=0)
+    ax.set_title("a  CoQ-pathway expression by donor and cell type", loc="left", fontsize=11.5, fontweight="bold")
+    ax.set_xlabel("Older donor group compared with young donors")
     cbar = fig.colorbar(scatter, ax=ax, shrink=0.58, pad=0.02)
-    cbar.set_label("Old vs Young mean log2(CPM + 0.1)")
-    ax.text(0, -0.13, "Circle size: mean expression    Stars: nominal Mann–Whitney P    Bold outline: global BH q<0.05",
-            transform=ax.transAxes, fontsize=8, color="#444444")
-    ax.text(-0.13, 1.03, "A", transform=ax.transAxes, fontsize=14, fontweight="bold")
+    cbar.set_label("log2 fold change")
+    size_handles = [
+        ax.scatter([], [], s=22 + 33 * value, facecolor="white", edgecolor="#4d4d4d", label=f"{10**(-value):.2g}")
+        for value in (0.5, 1.0, 2.0)
+    ]
+    ax.legend(handles=size_handles, title="Nominal P", frameon=False,
+              loc="upper left", bbox_to_anchor=(1.01, 0.30), fontsize=7, title_fontsize=7)
 
     ax2 = fig.add_subplot(grid[0, 1])
-    coq = long[long["gene"].eq("COQ8A")].copy()
+    coq8a = pseudobulk.loc[pseudobulk["gene"].eq("COQ8A")].copy()
+    young_means = coq8a.loc[coq8a["group"].eq("Young")].groupby("cell_type")["cpm"].mean()
+    coq8a["log10_fold_change"] = coq8a.apply(
+        lambda row: np.log10((row["cpm"] + PSEUDOCOUNT_CPM)
+                             / (young_means[row["cell_type"]] + PSEUDOCOUNT_CPM)), axis=1)
     rng = np.random.default_rng(20260906)
-    positions = []
-    labels = []
-    colors = {"Young<=46": "#4C78A8", "Old>=74": "#E45756"}
-    for i, ct in enumerate(CELLTYPES):
-        for j, age in enumerate(["Young<=46", "Old>=74"]):
-            pos = i * 2.6 + j
-            vals = coq.loc[(coq["cell_type"] == ct) & (coq["age_group"] == age), "log2_cpm"].dropna().to_numpy()
-            if len(vals):
-                bp = ax2.boxplot([vals], positions=[pos], widths=0.58, patch_artist=True, showfliers=False,
-                                 medianprops={"color": "black", "linewidth": 1.2},
-                                 boxprops={"facecolor": colors[age], "alpha": 0.30, "edgecolor": colors[age]},
-                                 whiskerprops={"color": colors[age]}, capprops={"color": colors[age]})
-                jitter = rng.uniform(-0.16, 0.16, len(vals))
-                ax2.scatter(np.full(len(vals), pos) + jitter, vals, s=22, color=colors[age], alpha=0.85,
-                            edgecolor="white", linewidth=0.35, zorder=3)
-            positions.append(pos); labels.append("Young" if j == 0 else "Old")
-        stat = stats[(stats["cell_type"] == ct) & (stats["gene"] == "COQ8A")].iloc[0]
-        if stat["nominal_stars"]:
-            block_vals = coq.loc[coq["cell_type"] == ct, "log2_cpm"].dropna()
-            y = block_vals.max() + 0.35
-            x0, x1 = i * 2.6, i * 2.6 + 1
-            ax2.plot([x0, x0, x1, x1], [y-0.08, y, y, y-0.08], color="black", lw=0.8)
-            ax2.text((x0+x1)/2, y+0.03, stat["nominal_stars"], ha="center", va="bottom", fontweight="bold")
-    ax2.set_xticks([i * 2.6 + 0.5 for i in range(len(CELLTYPES))], CELLTYPES, rotation=20, ha="right")
-    ax2.set_ylabel("COQ8A donor pseudobulk log2(CPM + 0.1)")
-    ax2.set_title("COQ8A donor distributions", fontsize=13, loc="left")
-    ax2.spines[["top", "right"]].set_visible(False)
-    ax2.text(-0.13, 1.03, "B", transform=ax2.transAxes, fontsize=14, fontweight="bold")
+    offsets = [-0.28, 0.0, 0.28]
+    positions: dict[tuple[str, str], float] = {}
+    for cell_index, cell_type in enumerate(CELL_TYPES):
+        for group_index, group in enumerate(GROUPS):
+            position = cell_index * 1.7 + offsets[group_index]
+            positions[(cell_type, group)] = position
+            values = coq8a.loc[
+                coq8a["cell_type"].eq(cell_type) & coq8a["group"].eq(group), "log10_fold_change"
+            ].dropna().to_numpy()
+            if not len(values):
+                continue
+            box = ax2.boxplot(
+                [values], positions=[position], widths=0.25, patch_artist=True, showfliers=False,
+                medianprops={"color": "black", "linewidth": 1.0},
+                boxprops={"facecolor": COLORS[group], "alpha": 0.30, "edgecolor": COLORS[group]},
+                whiskerprops={"color": COLORS[group], "linewidth": 0.8},
+                capprops={"color": COLORS[group], "linewidth": 0.8})
+            del box
+            jitter = rng.uniform(-0.08, 0.08, len(values))
+            ax2.scatter(np.full(len(values), position) + jitter, values, s=20,
+                        color=COLORS[group], edgecolor="white", linewidth=0.35, zorder=3)
 
-    n_fdr = int(stats["fdr_significant"].sum())
-    fig.suptitle("Age-associated COQ-gene expression in human skeletal-muscle nuclei", fontsize=15, y=1.02)
-    fig.text(0.5, -0.01,
-             f"Counts aggregated by donor and cell type; minimum {MIN_NUCLEI} nuclei per donor group. "
-             f"Stars show nominal P only; {n_fdr}/{stats['q_bh_global'].notna().sum()} tests pass global BH q<0.05.",
-             ha="center", fontsize=8, color="#444444")
-    fig.savefig(FIGDIR / "Fig04_COQ_donor_pseudobulk.png", dpi=400, bbox_inches="tight", facecolor="white")
+        ymax = coq8a.loc[coq8a["cell_type"].eq(cell_type), "log10_fold_change"].max()
+        for comp_index, comparison in enumerate(COMPARISONS):
+            row = statistics.loc[
+                statistics["cell_type"].eq(cell_type)
+                & statistics["gene"].eq("COQ8A")
+                & statistics["comparison"].eq(f"{comparison} vs Young")].iloc[0]
+            p_value = float(row["p_value_mann_whitney"])
+            label = f"{p_symbol(p_value)}  P={p_value:.3g}" if p_symbol(p_value) else f"P={p_value:.3g}"
+            add_bracket(ax2, positions[(cell_type, "Young")], positions[(cell_type, comparison)],
+                        ymax + 0.18 + 0.22 * comp_index, label)
+
+    ax2.axhline(0, color="#777777", linewidth=0.7, linestyle="--")
+    ax2.set_xticks([index * 1.7 for index in range(len(CELL_TYPES))], CELL_TYPES, rotation=18, ha="right")
+    ax2.set_ylabel("COQ8A log10 fold change relative to young mean")
+    ax2.set_title("b  COQ8A expression in individual donors", loc="left", fontsize=11.5, fontweight="bold")
+    ax2.spines[["top", "right"]].set_visible(False)
+    handles = [plt.Line2D([], [], marker="o", linestyle="", color=COLORS[group], label=group, markersize=5)
+               for group in GROUPS]
+    ax2.legend(handles=handles, frameon=False, fontsize=7.4, loc="lower left")
+
+    fig.suptitle("CoQ-pathway transcription in human skeletal-muscle myogenic nuclei",
+                 fontsize=13.5, fontweight="bold")
+    fig.text(
+        0.5, -0.012,
+        "Raw UMI counts were aggregated by biological donor and cell type. All observed donor-cell-type "
+        "combinations were included (at least one nucleus). Two-sided Mann-Whitney U tests; stars denote "
+        "nominal P<0.05; each point in b represents one donor.",
+        ha="center", fontsize=7.6, color="#333333")
+    FIGURE.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIGURE, dpi=400, bbox_inches="tight", facecolor="white")
     plt.close(fig)
 
 
 def main() -> None:
-    FIGDIR.mkdir(parents=True, exist_ok=True)
-    TABLEDIR.mkdir(parents=True, exist_ok=True)
-    meta = pd.read_csv(META, sep="\t", index_col="cell_id", low_memory=False)
+    PSEUDOBULK_TABLE.parent.mkdir(parents=True, exist_ok=True)
+    metadata = pd.read_csv(METADATA, sep="\t", index_col="cell_id", low_memory=False)
     adata = ad.read_h5ad(SOURCE, backed="r")
-    if not np.array_equal(meta.index.astype(str), adata.obs_names.astype(str)):
-        raise ValueError("Metadata does not align with source H5AD")
-    long = build_pseudobulk(adata, meta)
-    stats = calculate_stats(long)
-    long.to_csv(TABLEDIR / "COQ_donor_pseudobulk.tsv.gz", sep="\t", index=False, compression="gzip")
-    stats.to_csv(TABLEDIR / "COQ_age_statistics.tsv", sep="\t", index=False)
-    make_figure(long, stats)
-    print(stats[["cell_type", "gene", "log2fc_old_vs_young", "p_mannwhitney", "q_bh_global", "nominal_stars"]].to_string(index=False))
+    if not np.array_equal(metadata.index.astype(str), adata.obs_names.astype(str)):
+        raise ValueError("Cell metadata does not align with the source H5AD")
+    if "counts" not in adata.layers:
+        raise KeyError("The source H5AD must contain raw UMI counts in layers['counts']")
+
+    pseudobulk = build_pseudobulk(adata, metadata)
+    statistics = calculate_statistics(pseudobulk)
+    pseudobulk.to_csv(PSEUDOBULK_TABLE, sep="\t", index=False, compression="gzip")
+    statistics.to_csv(STATISTICS_TABLE, sep="\t", index=False)
+    make_figure(pseudobulk, statistics)
+
+    result = statistics.loc[
+        statistics["gene"].eq("COQ8A"),
+        ["cell_type", "comparison", "n_young", "n_older", "p_value_mann_whitney", "q_value_bh"]]
+    print(result.to_string(index=False))
+    print(f"Figure: {FIGURE}")
+    print(f"Tables: {PSEUDOBULK_TABLE}; {STATISTICS_TABLE}")
 
 
 if __name__ == "__main__":
