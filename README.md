@@ -1,121 +1,121 @@
-# Human skeletal-muscle snRNA-seq analysis for CoQ
+# Human skeletal-muscle snRNA-seq analysis of CoQ-pathway genes
 
-This repository contains the reproducible snRNA-seq workflow used to review
-coenzyme Q pathway genes in the human skeletal-muscle ageing atlas from Lai et
-al. (Nature 2024, DOI: 10.1038/s41586-024-07348-6).
+This repository contains the analysis code used to examine coenzyme Q pathway
+genes in the human skeletal-muscle ageing atlas reported by Lai et al.
+(*Nature*, 2024; DOI: 10.1038/s41586-024-07348-6).
 
-COMPASS is intentionally excluded from this release. Its input and cell-pool
-definition require a separate rerun decision.
+## Dataset
 
-## Current analysis status
+The local analysis includes 102 snRNA-seq libraries from 22 human donors. Raw
+gene-by-barcode count matrices were obtained from accession OMIX004308. The
+analysis imported 482,115 barcodes and retained 159,718 nuclei after quality
+control.
 
-- Local data: 102 libraries from 22 human donors and 482,115 raw nuclei.
-- Project QC: UMI count ≥1,000, detected genes ≥500 and mitochondrial fraction
-  ≤5%. These are the thresholds used in this reanalysis, not a claim of exact
-  source-paper filter reproduction.
-- Post-QC: 159,718 nuclei.
-- Scrublet: 2,634 predicted doublets; final marker and donor analyses use
-  157,084 singlets.
-- Final clustering: 34 `louvain_r2` clusters.
-- Marker ranking: cluster versus rest Wilcoxon; positive markers with detection
-  fraction ≥0.25 and average log2 fold change ≥0.25.
-- Primary analysis set: 148,296 singlets after unresolved clusters are excluded.
-
-The historical Step 4 marker table described an earlier 23-cluster solution.
-`tables/final34_markers.tsv.gz` replaces it with markers for the actual final
-34 clusters.
-
-## Annotation policy
-
-Annotation follows the source atlas approach: cluster-level marker ranking,
-marker-panel review, dot plots and manual cluster naming. Broad labels remain
-unchanged unless their lineage assignment conflicts with the observed marker
-programme.
-
-Definite corrections are recorded in `tables/annotation_corrections.tsv`.
-Clusters with an uncertain precise identity remain `Unresolved` and are not
-forced into another lineage.
-
-## COQ pathway analysis
-
-`code/make_coq_donor_figure.py` aggregates raw UMI counts by biological donor
-and cell type. Donor-cell-type groups require at least 30 nuclei. It calculates
-linear CPM, uses log2(CPM + 0.1) for display, and compares younger and older
-donors with a two-sided Mann–Whitney test.
-
-The figure uses:
-
-- colour for Old versus Young mean log2(CPM + 0.1);
-- point size for mean donor-level expression;
-- stars for nominal P values;
-- a bold outline for global Benjamini–Hochberg q<0.05.
-
-Six comparisons have nominal P<0.05, but none of 52 tests passes global BH
-q<0.05. COQ8A is not significant in Type I, Type II, Specialized MF or MuSC.
-The nominal stars therefore remain descriptive and cannot support an FDR-level
-claim.
-
-The prespecified COQ8A sensitivity audit is implemented in
-`code/check_coq8a_sensitivity.py`. Across 776 calculable specifications, raw
-P<0.05 occurred only when donor-cell-type groups with as few as one nucleus were
-allowed; no specification with a minimum of five or more nuclei had raw P<0.05,
-and no exploratory specification passed BH correction.
-
-## Repository structure
+Large expression matrices are not stored in this repository. The retained
+analysis object is:
 
 ```text
-code/           analysis scripts
-config/         reviewed cluster annotation
-figures/        four final PNG figures only
-metadata/       cell-level annotation sidecar, local release only
-tables/         final audit and statistical tables, local release only
-presentation/   four-slide progress summary, local release only
+Data_raw/step5_out_v21/annotated_paper_cluster_level_v21.h5ad
 ```
+
+## Analysis workflow
+
+1. `step1_import_counts.py` imports sparse gene-by-barcode matrices and stores
+   integer UMI counts in both `X` and `layers['counts']`.
+2. `step2_qc_filter.py` retains nuclei with at least 1,000 UMIs, at least 500
+   detected genes and at most 5% mitochondrial counts, following the source
+   article and its Reporting Summary.
+3. `step2_scrublet.py` applies Scrublet independently to each library with at
+   least 200 QC-passing nuclei. A total of 2,634 predicted doublets were flagged
+   and excluded from marker and donor-level analyses.
+4. `step3_harmony_cluster.py` performs counts-per-10,000 normalization, log1p
+   transformation, selection of 3,000 highly variable genes, regression of UMI
+   count and mitochondrial fraction, scaling, 50-component PCA and Harmony
+   correction. The retained final graph uses 30 Harmony-corrected components,
+   30 nearest neighbours, Louvain resolution 2.0, random seed 0 and UMAP.
+5. `step4_rank_final_clusters.py` ranks positive markers for each of the 34 final
+   Louvain clusters using a cluster-versus-rest Wilcoxon test. Genes must be
+   detected in at least 25% of nuclei in the cluster and have average log2 fold
+   change of at least 0.25.
+6. `step4_freeze_annotations.py` applies the reviewed cluster annotation table
+   and writes a cell-level metadata sidecar linked to the H5AD by cell identifier.
+7. `make_coq_donor_figure.py` aggregates raw UMI counts by biological donor and
+   cell type. Every observed donor-cell-type combination is included; no minimum
+   nucleus count is imposed.
+
+Cell types were assigned manually from ranked cluster markers, canonical marker
+panels, UMAP structure and the source atlas annotation framework. Ambiguous
+clusters were retained as unresolved rather than assigned to an unsupported
+lineage.
+
+## Donor-level CoQ analysis
+
+Donors were classified as young (age <=46 years), older with Barthel Index 100,
+or older with Barthel Index <100. Raw UMI counts were summed within each donor
+and annotated myogenic cell type and converted to CPM using the corresponding
+pseudobulk library size. Group comparisons use two-sided Mann-Whitney U tests
+with donors as independent observations.
+
+In MuSCs, COQ8A expression differs between young donors and both older groups:
+
+- older, Barthel Index 100 versus young: P = 0.03333;
+- older, Barthel Index <100 versus young: P = 0.02225.
+
+The figure denotes nominal P <0.05 with stars and reports the exact P values.
 
 ## Reproduction
 
-Create the environment:
+Install the recorded Python environment:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Set the local project root before running raw-data import on Windows:
+Set the H5AD path and rebuild the final tables and figures:
 
 ```powershell
-$env:COQ_SNRNA_PROJECT_ROOT = "D:\path\to\project"
-$env:COQ_SNRNA_DATA_ROOT = "$env:COQ_SNRNA_PROJECT_ROOT\Data_raw"
+.\run_release.ps1 -H5ad "D:\path\to\annotated_paper_cluster_level_v21.h5ad"
 ```
 
-The retained analysis object must contain:
+The source object must contain raw UMI counts in `layers['counts']`, normalized
+log1p counts-per-10,000 in `raw.X`, final cluster labels in `obs['louvain_r2']`,
+and UMAP coordinates in `obsm['X_umap_r2']`.
 
-- raw UMI counts in `layers['counts']`;
-- log1p counts per 10,000 in `raw.X` for marker ranking;
-- `louvain_r2`, donor metadata and Scrublet flags in `.obs`;
-- final UMAP coordinates in `.obsm`.
+The four-slide figure summary is available locally at
+`presentation/snRNA_analysis_summary_final.pptx`.
 
-To rebuild the final release from that object:
+## Outputs
 
-```powershell
-.\run_release.ps1 -H5ad "D:\path\to\annotated_input.h5ad"
-```
-
-## Final figure files
+Figures:
 
 - `figures/Fig01_QC_overview.png`
 - `figures/Fig02_Annotation_UMAP.png`
-- `figures/Fig03_Final34_marker_dotplot.png`
-- `figures/Fig04_COQ_donor_pseudobulk.png`
+- `figures/Fig03_Celltype_marker_dotplot.png`
+- `figures/Fig04_COQ_donor_analysis.png`
 
-The local progress deck is `presentation/snRNA_analysis_summary.pptx`, with one
-final figure per slide.
+Tables:
 
-## Data and references
+- `tables/sample_manifest.tsv`
+- `tables/library_qc_audit.tsv`
+- `tables/final34_markers.tsv.gz`
+- `tables/cluster_annotations.tsv`
+- `tables/celltype_marker_dotplot_values.tsv.gz`
+- `tables/COQ_donor_pseudobulk.tsv.gz`
+- `tables/COQ_statistics.tsv`
 
-Expression matrices and H5AD objects are not stored in GitHub because of file
-size. The local cell metadata sidecar joins the immutable H5AD by `cell_id`.
+## Code availability statement
 
-- Source article: https://pmc.ncbi.nlm.nih.gov/articles/PMC11062927/
-- Source annotation code: https://github.com/123anjuan/HMA/blob/main/block%201/hu-snRNAseq_prior_annotation.Rmd
-- Donor-level pseudobulk rationale: https://pmc.ncbi.nlm.nih.gov/articles/PMC8479118/
+Code used for snRNA-seq preprocessing, clustering, annotation, donor-level
+pseudobulk analysis and figure generation is available at
+https://github.com/brianchiuyulab/snRNA-seq-analysis-for-CoQ. Raw sequencing
+data are available from the CNGB Nucleotide Sequence Archive under accession
+codes CNP0004394, CNP0004395, CNP0004494 and CNP0004495; the count matrices used
+in this reanalysis were obtained from OMIX004308.
+
+## References
+
+- Lai Y. et al. Multimodal cell atlas of the ageing human skeletal muscle.
+  *Nature* 628, 154-164 (2024). https://doi.org/10.1038/s41586-024-07348-6
+- Source annotation notebook:
+  https://github.com/123anjuan/HMA/blob/main/block%201/hu-snRNAseq_prior_annotation.Rmd
 
