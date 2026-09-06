@@ -96,7 +96,7 @@ Figures:
 Tables:
 
 - `tables/sample_manifest.tsv`
-- `tables/library_qc_audit.tsv`
+- `tables/library_qc_summary.tsv`
 - `tables/final34_markers.tsv.gz`
 - `tables/cluster_annotations.tsv`
 - `tables/celltype_marker_dotplot_values.tsv.gz`
