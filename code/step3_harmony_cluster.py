@@ -110,7 +110,7 @@ def main():
 
     ap.add_argument("--remove_doublets", type=int, default=0, choices=[0, 1])
 
-    # paper-like parameters
+    # Parameters used for the retained project object
     ap.add_argument("--hvg_n", type=int, default=3000)
     ap.add_argument("--hvg_flavor", default="seurat")
     ap.add_argument("--regress_n_genes", type=int, default=0, choices=[0, 1])
