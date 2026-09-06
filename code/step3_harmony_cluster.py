@@ -13,7 +13,7 @@ import scanpy as sc
 import anndata as ad
 
 
-# ---- silence specific futurewarning from anndata concat/merge (optional, safe) ----
+# Silence the AnnData concatenation FutureWarning.
 warnings.filterwarnings("ignore", category=FutureWarning, module="anndata")
 
 
@@ -120,7 +120,7 @@ def main():
 
     # clustering
     ap.add_argument("--cluster_method", default="louvain", choices=["louvain", "leiden", "none"],
-                    help="paper uses louvain; if louvain fails, script will auto-fallback to leiden unless 'none'")
+                    help="Use Louvain by default; fall back to Leiden if Louvain is unavailable")
     ap.add_argument("--cluster_resolution", type=float, default=2.0)
 
     # umap
@@ -247,7 +247,7 @@ def main():
     sc.pl.pca_variance_ratio(adata, n_pcs=args.pca_n_comps, log=True, show=False, save=None)
     # Also save a copy with a deterministic filename
     # (matplotlib backend used by scanpy might already save; we keep explicit copy)
-    # We'll rely on scanpy's default save naming in figs/; your previous duplicate prefix issue is avoided.
+    # Scanpy supplies the PCA plot filename in the configured figure directory.
 
     # 10) Harmony
     print("[HARMONY] integrating by batch='sample_id'")
@@ -266,12 +266,12 @@ def main():
         print("[tSNE] computing tSNE ...")
         sc.tl.tsne(adata, use_rep="X_harmony_pcs", random_state=args.seed)
 
-    # ---- checkpoint after UMAP (so you never lose Harmony+UMAP) ----
+    # ---- checkpoint after UMAP ----
     ckpt_h5ad = os.path.join(out_root, "merged_harmony_precluster.h5ad")
     print("[CHECKPOINT] writing:", ckpt_h5ad)
     safe_write_h5ad(adata, ckpt_h5ad)
 
-    # 12) clustering (paper Louvain, but robust)
+    # 12) clustering
     cluster_key = None
     if args.cluster_method != "none":
         print(f"[CLUSTER] requested method={args.cluster_method}, res={args.cluster_resolution}")
