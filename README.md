@@ -102,19 +102,22 @@ The source object must contain raw UMI counts in `layers['counts']`, normalized
 log1p counts-per-10,000 in `raw.X`, final cluster labels in `obs['louvain_r2']`,
 and UMAP coordinates in `obsm['X_umap_r2']`.
 
-The six-slide figure summary is available locally at
-`presentation/snRNA_analysis_summary_6fig_final.pptx`.
+The nine-slide figure summary is available locally at
+`presentation/snRNA_analysis_summary_9fig_final.pptx`.
 
 ## Outputs
 
 Figures:
 
-- `figures/Fig01_QC_overview.png`
-- `figures/Fig02_Celltype_annotation_UMAP.png`
-- `figures/Fig03_Louvain_clusters_UMAP.png`
-- `figures/Fig04_Celltype_marker_dotplot.png`
-- `figures/Fig05_COQ_pathway_dotplot.png`
-- `figures/Fig06_COQ8A_donor_boxplot.png`
+- `figures/Fig01_QC_nuclei_before_after.png`
+- `figures/Fig02_QC_library_retention.png`
+- `figures/Fig03_QC_nucleus_metrics.png`
+- `figures/Fig04_Celltype_abundance.png`
+- `figures/Fig05_Celltype_annotation_UMAP.png`
+- `figures/Fig06_Louvain_clusters_UMAP.png`
+- `figures/Fig07_Celltype_marker_dotplot.png`
+- `figures/Fig08_COQ_pathway_dotplot.png`
+- `figures/Fig09_COQ8A_donor_boxplot.png`
 
 Tables:
 
