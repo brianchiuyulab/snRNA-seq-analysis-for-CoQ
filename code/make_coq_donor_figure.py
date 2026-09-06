@@ -25,8 +25,8 @@ from scipy.stats import mannwhitneyu
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = Path(os.environ.get("COQ_SNRNA_H5AD", "analysis_input.h5ad"))
 METADATA = ROOT / "metadata" / "cell_metadata.tsv.gz"
-DOTPLOT_FIGURE = ROOT / "figures" / "Fig05_COQ_pathway_dotplot.png"
-DONOR_FIGURE = ROOT / "figures" / "Fig06_COQ8A_donor_boxplot.png"
+DOTPLOT_FIGURE = ROOT / "figures" / "Fig08_COQ_pathway_dotplot.png"
+DONOR_FIGURE = ROOT / "figures" / "Fig09_COQ8A_donor_boxplot.png"
 PSEUDOBULK_TABLE = ROOT / "tables" / "COQ_donor_pseudobulk.tsv.gz"
 STATISTICS_TABLE = ROOT / "tables" / "COQ_statistics.tsv"
 
