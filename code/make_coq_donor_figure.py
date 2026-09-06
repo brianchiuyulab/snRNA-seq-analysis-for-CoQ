@@ -9,6 +9,7 @@ and explicitly disclosed in the figure.
 from __future__ import annotations
 
 from pathlib import Path
+import os
 
 import anndata as ad
 import matplotlib.pyplot as plt
@@ -20,10 +21,7 @@ from scipy.stats import mannwhitneyu
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = Path(
-    r"C:\Users\User\Desktop\Single cell for CoQ\Data_raw\step5_out_v21"
-    r"\annotated_paper_cluster_level_v21.h5ad"
-)
+SOURCE = Path(os.environ.get("COQ_SNRNA_H5AD", "analysis_input.h5ad"))
 META = ROOT / "metadata" / "cell_metadata.tsv.gz"
 FIGDIR = ROOT / "figures"
 TABLEDIR = ROOT / "tables"
