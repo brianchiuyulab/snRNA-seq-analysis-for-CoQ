@@ -32,12 +32,10 @@ FAIL_TSV = os.path.join(OUT_ROOT, "failures.tsv")
 # HELPERS
 # ==============================================================================
 def read_table1_snRNA_subjects(xlsx_path: str) -> list[str]:
-    """
-    Table1.xlsx 的結構你那份是：
-    - 第 0 行可能是 title / 空行
-    - 第 1 行才是真正 header: Donor, Sex, Age, ..., Data
-    - 第 2 行開始是資料
-    我們只抓 Data 欄位包含 'snRNA-seq' 的 Donor，得到 22 位。
+    """Read donors with snRNA-seq data from the study metadata table.
+
+    The first spreadsheet row contains a title, the second row contains column
+    names, and data begin on the third row.
     """
     raw = pd.read_excel(xlsx_path, header=None)
     header = raw.iloc[1].tolist()
@@ -54,13 +52,7 @@ def read_table1_snRNA_subjects(xlsx_path: str) -> list[str]:
 
 
 def guess_subject_id_from_prefix(sample_prefix: str) -> str:
-    """
-    sample_prefix 會像：
-    - om1_gm_snrna_seq
-    - ym3_gc_snrna_seq_1
-    - p21_gm_snrna_seq_6
-    抓前綴 OM/YM/P + 數字
-    """
+    """Extract the OM, YM or P donor identifier from a sample prefix."""
     s = sample_prefix.lower()
     m = re.match(r"^(om\d+|ym\d+|p\d+)", s)
     if not m:
@@ -69,9 +61,7 @@ def guess_subject_id_from_prefix(sample_prefix: str) -> str:
 
 
 def guess_batch(subject_id: str) -> str:
-    """
-    你目前這批資料：OM/YM 是中國，P 是歐洲（依你檔名與資料包）
-    """
+    """Assign study cohort from the donor identifier convention."""
     if subject_id.startswith("P"):
         return "Europe"
     if subject_id.startswith("OM") or subject_id.startswith("YM"):
@@ -80,10 +70,7 @@ def guess_batch(subject_id: str) -> str:
 
 
 def guess_muscle_from_prefix(sample_prefix: str) -> str:
-    """
-    從檔名猜肌肉部位標記（僅作為 metadata，後續還可用 Table1/其他表修正）
-    常見：GM, VL, TA, ST, GC
-    """
+    """Extract the GM, VL, TA, ST or GC muscle code from a sample prefix."""
     s = sample_prefix.lower()
     for tag in ["gm", "vl", "ta", "st", "gc"]:
         if f"_{tag}_" in s:
@@ -92,18 +79,7 @@ def guess_muscle_from_prefix(sample_prefix: str) -> str:
 
 
 def list_triplets_in_tar(tar_path: str) -> dict[str, dict[str, str]]:
-    """
-    在 tar 裡掃描所有 members，用 basename 判斷 triplet：
-    - *_matrix.mtx or *_matrix.mtx.gz
-    - *_barcodes.tsv or *_barcodes.tsv.gz
-    - *_features.tsv / *_features.tsv.gz 或 *_genes.tsv / *_genes.tsv.gz
-
-    回傳：
-    {
-      "p21_gm_snrna_seq_1": {"mtx": "...member...", "barcodes": "...", "features": "..."},
-      ...
-    }
-    """
+    """Locate complete matrix, barcode and feature triplets in an archive."""
     trip = {}
     with tarfile.open(tar_path, "r:*") as t:
         members = t.getmembers()
@@ -135,9 +111,7 @@ def list_triplets_in_tar(tar_path: str) -> dict[str, dict[str, str]]:
 
 
 def extract_member_to_file(tar: tarfile.TarFile, member_name: str, out_path: str):
-    """
-    把 tar member 寫到 out_path（原樣，不解壓 gzip）
-    """
+    """Copy an archive member without altering gzip compression."""
     m = tar.getmember(member_name)
     f = tar.extractfile(m)
     if f is None:
@@ -162,13 +136,7 @@ def read_mtx_maybe_gz(path: str):
 
 
 def load_10x_from_tempdir(tmpdir: str) -> ad.AnnData:
-    """
-    tmpdir 內必須有：
-    - matrix.mtx 或 matrix.mtx.gz
-    - barcodes.tsv 或 barcodes.tsv.gz
-    - features.tsv 或 features.tsv.gz
-    我們手動讀，避免 scanpy 對 features 欄位數的假設。
-    """
+    """Load a 10x-format matrix, barcode file and feature file."""
     # locate files
     cand_mtx = [os.path.join(tmpdir, x) for x in ["matrix.mtx.gz", "matrix.mtx"] if os.path.exists(os.path.join(tmpdir, x))]
     cand_bar = [os.path.join(tmpdir, x) for x in ["barcodes.tsv.gz", "barcodes.tsv"] if os.path.exists(os.path.join(tmpdir, x))]
@@ -190,7 +158,7 @@ def load_10x_from_tempdir(tmpdir: str) -> ad.AnnData:
 
     # counts should be integer (mmread gives float)
     if X.dtype != np.int32 and X.dtype != np.int64:
-        # 先轉成 int64 再視情況壓到 int32
+        # Convert safely to integer counts and use int32 when possible.
         X = X.astype(np.int64)
         if X.max() < np.iinfo(np.int32).max:
             X = X.astype(np.int32)
@@ -250,7 +218,7 @@ def main():
         complete = list_triplets_in_tar(tar_path)
         print(f"  complete triplets found: {len(complete)}")
 
-        # filter by Table1 subjects (保留 sample_prefix 對應的 subject_id 在 22 位內)
+        # Retain samples belonging to donors listed for snRNA-seq in Table 1.
         kept = {}
         for sample_prefix in complete.keys():
             subj = guess_subject_id_from_prefix(sample_prefix)
@@ -342,7 +310,7 @@ def main():
                     })
 
                 except Exception as e:
-                    # 記錄失敗原因，讓你回頭精準查 OM4 或特定 sample
+                    # Record the exact sample and archive member that failed.
                     print(f"  [FAIL] {sample_id}: {e}")
                     fail_rows.append({
                         "sample_id": sample_id,
