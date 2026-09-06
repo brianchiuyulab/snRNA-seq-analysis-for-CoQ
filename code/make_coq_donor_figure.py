@@ -25,7 +25,8 @@ from scipy.stats import mannwhitneyu
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = Path(os.environ.get("COQ_SNRNA_H5AD", "analysis_input.h5ad"))
 METADATA = ROOT / "metadata" / "cell_metadata.tsv.gz"
-FIGURE = ROOT / "figures" / "Fig04_COQ_donor_analysis.png"
+DOTPLOT_FIGURE = ROOT / "figures" / "Fig05_COQ_pathway_dotplot.png"
+DONOR_FIGURE = ROOT / "figures" / "Fig06_COQ8A_donor_boxplot.png"
 PSEUDOBULK_TABLE = ROOT / "tables" / "COQ_donor_pseudobulk.tsv.gz"
 STATISTICS_TABLE = ROOT / "tables" / "COQ_statistics.tsv"
 
@@ -174,19 +175,18 @@ def calculate_statistics(pseudobulk: pd.DataFrame) -> pd.DataFrame:
 
 def add_bracket(ax, x0: float, x1: float, y: float, text: str) -> None:
     height = 0.08
-    ax.plot([x0, x0, x1, x1], [y, y + height, y + height, y], color="black", lw=0.8)
-    ax.text((x0 + x1) / 2, y + height + 0.02, text, ha="center", va="bottom", fontsize=7.2)
+    ax.plot([x0, x0, x1, x1], [y, y + height, y + height, y], color="black", lw=1.0)
+    ax.text((x0 + x1) / 2, y + height + 0.025, text, ha="center", va="bottom", fontsize=9.5)
 
 
 def make_figure(pseudobulk: pd.DataFrame, statistics: pd.DataFrame) -> None:
     plt.rcParams.update({
-        "font.family": "Arial", "font.size": 8.5, "axes.linewidth": 0.8,
-        "xtick.major.width": 0.8, "ytick.major.width": 0.8,
+        "font.family": "Arial", "font.size": 11.0, "axes.linewidth": 1.0,
+        "xtick.major.width": 1.0, "ytick.major.width": 1.0,
     })
-    fig = plt.figure(figsize=(13.2, 8.1), constrained_layout=True)
-    grid = fig.add_gridspec(1, 2, width_ratios=[1.32, 1.0])
 
-    ax = fig.add_subplot(grid[0, 0])
+    # Standalone pathway dot plot for legibility after journal-page reduction.
+    fig, ax = plt.subplots(figsize=(8.8, 6.8), constrained_layout=True)
     plot = statistics.copy()
     plot["column"] = plot["cell_type"] + "\n" + plot["comparison"].str.replace(" vs Young", "", regex=False)
     columns = [f"{cell_type}\n{comparison}" for cell_type in CELL_TYPES for comparison in COMPARISONS]
@@ -196,41 +196,55 @@ def make_figure(pseudobulk: pd.DataFrame, statistics: pd.DataFrame) -> None:
     color_limit = max(1.0, float(np.nanpercentile(finite_fc, 95))) if len(finite_fc) else 1.0
     significance = -np.log10(plot["p_value_mann_whitney"].clip(lower=1e-12))
     sizes = 22 + 33 * significance.clip(upper=4)
+    is_significant = plot["p_value_mann_whitney"].lt(0.05).fillna(False)
+    edge_colors = np.where(is_significant, "#9B1B67", "#5A5A5A")
+    edge_widths = np.where(is_significant, 1.25, 0.35)
+
+    # Guide the eye to the principal gene without obscuring the other results.
+    coq8a_y = y_map["COQ8A"]
+    ax.axhspan(coq8a_y - 0.43, coq8a_y + 0.43, color="#F7EEF4", zorder=0)
     scatter = ax.scatter(
         plot["column"].map(x_map), plot["gene"].map(y_map), s=sizes,
         c=plot["log2_fold_change"], cmap="RdBu_r",
         norm=TwoSlopeNorm(vmin=-color_limit, vcenter=0, vmax=color_limit),
-        edgecolor="#4d4d4d", linewidth=0.35, zorder=2,
+        edgecolor=edge_colors, linewidth=edge_widths, zorder=2,
     )
     for _, row in plot.iterrows():
         symbol = p_symbol(float(row["p_value_mann_whitney"]))
         if symbol:
-            ax.text(x_map[row["column"]], y_map[row["gene"]], symbol,
-                    ha="center", va="center", fontsize=7.2, fontweight="bold", color="black")
+            ax.text(x_map[row["column"]] + 0.18, y_map[row["gene"]] + 0.18, symbol,
+                    ha="center", va="center", fontsize=10.0, fontweight="bold",
+                    color="#9B1B67", zorder=4)
     ax.set_xticks(range(len(columns)))
-    ax.set_xticklabels([label.replace("Older, ", "") for label in columns], rotation=43, ha="right", fontsize=7.4)
+    ax.set_xticklabels([label.replace("Older, ", "") for label in columns], rotation=42, ha="right", fontsize=10.0)
     ax.set_yticks(range(len(GENES)), GENES[::-1])
+    ax.tick_params(axis="y", labelsize=11.0)
     ax.set_xlim(-0.6, len(columns) - 0.4)
     ax.set_ylim(-0.6, len(GENES) - 0.4)
     ax.grid(color="#eeeeee", linewidth=0.6, zorder=0)
-    ax.set_title("a  CoQ-pathway expression by donor and cell type", loc="left", fontsize=11.5, fontweight="bold")
-    ax.set_xlabel("Older donor group compared with young donors")
-    cbar = fig.colorbar(scatter, ax=ax, shrink=0.58, pad=0.02)
-    cbar.set_label("log2 fold change")
+    ax.set_xlabel("Older group versus young", fontsize=12.0)
+    cbar = fig.colorbar(scatter, ax=ax, shrink=0.62, pad=0.025)
+    cbar.set_label("log2 fold change", fontsize=11.0)
+    cbar.ax.tick_params(labelsize=10.0)
     size_handles = [
         ax.scatter([], [], s=22 + 33 * value, facecolor="white", edgecolor="#4d4d4d", label=f"{10**(-value):.2g}")
         for value in (0.5, 1.0, 2.0)
     ]
+    size_handles.append(plt.Line2D([], [], marker="$*$", linestyle="", color="#9B1B67",
+                                   label="P < 0.05", markersize=9))
     ax.legend(handles=size_handles, title="Nominal P", frameon=False,
-              loc="upper left", bbox_to_anchor=(1.01, 0.30), fontsize=7, title_fontsize=7)
+              loc="upper left", bbox_to_anchor=(1.01, 0.34), fontsize=9.5, title_fontsize=10.0)
+    DOTPLOT_FIGURE.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(DOTPLOT_FIGURE, dpi=500, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
 
-    ax2 = fig.add_subplot(grid[0, 1])
+    # Standalone donor plot with larger type and no embedded methods paragraph.
+    fig, ax2 = plt.subplots(figsize=(8.0, 5.8), constrained_layout=True)
     coq8a = pseudobulk.loc[pseudobulk["gene"].eq("COQ8A")].copy()
     young_means = coq8a.loc[coq8a["group"].eq("Young")].groupby("cell_type")["cpm"].mean()
     coq8a["log10_fold_change"] = coq8a.apply(
         lambda row: np.log10((row["cpm"] + PSEUDOCOUNT_CPM)
                              / (young_means[row["cell_type"]] + PSEUDOCOUNT_CPM)), axis=1)
-    rng = np.random.default_rng(20260906)
     offsets = [-0.28, 0.0, 0.28]
     positions: dict[tuple[str, str], float] = {}
     for cell_index, cell_type in enumerate(CELL_TYPES):
@@ -249,7 +263,9 @@ def make_figure(pseudobulk: pd.DataFrame, statistics: pd.DataFrame) -> None:
                 whiskerprops={"color": COLORS[group], "linewidth": 0.8},
                 capprops={"color": COLORS[group], "linewidth": 0.8})
             del box
-            jitter = rng.uniform(-0.08, 0.08, len(values))
+            # Fixed horizontal spreading makes every donor visible, including
+            # donors with identical zero CPM values.
+            jitter = np.linspace(-0.11, 0.11, len(values)) if len(values) > 1 else np.zeros(1)
             ax2.scatter(np.full(len(values), position) + jitter, values, s=20,
                         color=COLORS[group], edgecolor="white", linewidth=0.35, zorder=3)
 
@@ -265,24 +281,14 @@ def make_figure(pseudobulk: pd.DataFrame, statistics: pd.DataFrame) -> None:
                         ymax + 0.18 + 0.22 * comp_index, label)
 
     ax2.axhline(0, color="#777777", linewidth=0.7, linestyle="--")
-    ax2.set_xticks([index * 1.7 for index in range(len(CELL_TYPES))], CELL_TYPES, rotation=18, ha="right")
-    ax2.set_ylabel("COQ8A log10 fold change relative to young mean")
-    ax2.set_title("b  COQ8A expression in individual donors", loc="left", fontsize=11.5, fontweight="bold")
+    ax2.set_xticks([index * 1.7 for index in range(len(CELL_TYPES))], CELL_TYPES, rotation=15, ha="right")
+    ax2.tick_params(axis="both", labelsize=11.0)
+    ax2.set_ylabel("COQ8A expression\nlog10 fold change relative to young mean", fontsize=12.0)
     ax2.spines[["top", "right"]].set_visible(False)
     handles = [plt.Line2D([], [], marker="o", linestyle="", color=COLORS[group], label=group, markersize=5)
                for group in GROUPS]
-    ax2.legend(handles=handles, frameon=False, fontsize=7.4, loc="lower left")
-
-    fig.suptitle("CoQ-pathway transcription in human skeletal-muscle myogenic nuclei",
-                 fontsize=13.5, fontweight="bold")
-    fig.text(
-        0.5, -0.012,
-        "Raw UMI counts were aggregated by biological donor and cell type. All observed donor-cell-type "
-        "combinations were included (at least one nucleus). Two-sided Mann-Whitney U tests; stars denote "
-        "nominal P<0.05; each point in b represents one donor.",
-        ha="center", fontsize=7.6, color="#333333")
-    FIGURE.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIGURE, dpi=400, bbox_inches="tight", facecolor="white")
+    ax2.legend(handles=handles, frameon=False, fontsize=10.0, loc="lower left")
+    fig.savefig(DONOR_FIGURE, dpi=500, bbox_inches="tight", facecolor="white")
     plt.close(fig)
 
 
@@ -305,7 +311,7 @@ def main() -> None:
         statistics["gene"].eq("COQ8A"),
         ["cell_type", "comparison", "n_young", "n_older", "p_value_mann_whitney", "q_value_bh"]]
     print(result.to_string(index=False))
-    print(f"Figure: {FIGURE}")
+    print(f"Figures: {DOTPLOT_FIGURE}; {DONOR_FIGURE}")
     print(f"Tables: {PSEUDOBULK_TABLE}; {STATISTICS_TABLE}")
 
 
