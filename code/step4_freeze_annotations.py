@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import anndata as ad
@@ -17,10 +18,7 @@ import numpy as np
 import pandas as pd
 
 
-DEFAULT_SOURCE = Path(
-    r"C:\Users\User\Desktop\Single cell for CoQ\Data_raw\step5_out_v21"
-    r"\annotated_paper_cluster_level_v21.h5ad"
-)
+DEFAULT_SOURCE = Path(os.environ.get("COQ_SNRNA_H5AD", "analysis_input.h5ad"))
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "config" / "cluster_annotation.tsv"
 DEFAULT_OUT = ROOT / "metadata"
