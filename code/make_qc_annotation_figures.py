@@ -54,30 +54,36 @@ def make_qc_figure(meta: pd.DataFrame) -> None:
     merged["retention"] = merged["n_cells_after"] / merged["n_cells_before"]
     merged.to_csv(TABLEDIR / "library_qc_summary.tsv", sep="\t", index=False)
 
-    fig, axes = plt.subplots(2, 2, figsize=(10.5, 8.0), constrained_layout=True)
+    plt.rcParams.update({
+        "font.family": "Arial", "font.size": 11.0, "axes.linewidth": 1.0,
+        "xtick.major.width": 1.0, "ytick.major.width": 1.0,
+    })
 
-    ax = axes[0, 0]
+    fig, ax = plt.subplots(figsize=(6.8, 5.6), constrained_layout=True)
     colors = np.where(merged["scrublet_ran"].fillna(False), "#377eb8", "#fdae61")
-    ax.scatter(merged["n_cells_before"], merged["n_cells_after"], c=colors, s=23, alpha=0.8, edgecolor="none")
+    ax.scatter(merged["n_cells_before"], merged["n_cells_after"], c=colors,
+               s=34, alpha=0.82, edgecolor="none")
     lim = [max(1, min(merged["n_cells_after"].min(), merged["n_cells_before"].min())), merged["n_cells_before"].max() * 1.15]
     ax.plot(lim, lim, color="0.4", lw=1, ls="--")
     ax.set(xscale="log", yscale="log", xlabel="Nuclei before QC", ylabel="Nuclei after QC")
     ax.legend(handles=[
         Line2D([], [], marker="o", ls="", color="#377eb8", label="Scrublet run"),
         Line2D([], [], marker="o", ls="", color="#fdae61", label="<200 nuclei; Scrublet skipped"),
-    ], frameon=False, fontsize=8)
-    panel_label(ax, "A")
+    ], frameon=False, fontsize=10)
+    fig.savefig(OUTDIR / "Fig01_QC_nuclei_before_after.png", dpi=500, bbox_inches="tight")
+    plt.close(fig)
 
-    ax = axes[0, 1]
+    fig, ax = plt.subplots(figsize=(7.2, 5.2), constrained_layout=True)
     ordered = merged.sort_values("retention").reset_index(drop=True)
     ax.bar(np.arange(len(ordered)), ordered["retention"] * 100, color="#4c78a8", width=0.85)
     ax.axhline(50, color="0.35", lw=0.8, ls="--")
     ax.set(xlabel="Libraries sorted by retention", ylabel="Retained after QC (%)", ylim=(0, 100))
     ax.set_xticks([])
-    panel_label(ax, "B")
+    fig.savefig(OUTDIR / "Fig02_QC_library_retention.png", dpi=500, bbox_inches="tight")
+    plt.close(fig)
 
     singlets = meta.loc[meta["is_singlet_v22"]].copy()
-    ax = axes[1, 0]
+    fig, ax = plt.subplots(figsize=(7.2, 5.4), constrained_layout=True)
     values = [
         np.log10(singlets["total_counts"].clip(lower=1)),
         np.log10(singlets["n_genes_by_counts"].clip(lower=1)),
@@ -89,32 +95,17 @@ def make_qc_figure(meta: pd.DataFrame) -> None:
     for body in parts["bodies"]:
         body.set_facecolor("#72b7b2"); body.set_edgecolor("none"); body.set_alpha(0.85)
     parts["cmedians"].set_color("black")
-    ax.set_xticks(range(1, 5), labels, rotation=20, ha="right")
+    ax.set_xticks(range(1, 5), labels, rotation=16, ha="right")
     ax.set_ylabel("Value")
-    panel_label(ax, "C")
+    fig.savefig(OUTDIR / "Fig03_QC_nucleus_metrics.png", dpi=500, bbox_inches="tight")
+    plt.close(fig)
 
-    ax = axes[1, 1]
+    fig, ax = plt.subplots(figsize=(7.2, 5.8), constrained_layout=True)
     counts = singlets["cell_type_v22"].value_counts().sort_values()
     ax.barh(counts.index, counts.values, color=[PALETTE.get(x, "#999999") for x in counts.index])
     ax.set(xlabel="Singlet nuclei", ylabel="")
-    ax.tick_params(axis="y", labelsize=8)
-    panel_label(ax, "D")
-
-    total_before = int(qc["n_cells_before"].sum())
-    total_after = int(qc["n_cells_after"].sum())
-    total_doublets = int(scrub["n_predicted_doublets"].fillna(0).sum())
-    fig.suptitle(
-        f"snRNA-seq QC: {len(qc)} libraries; {total_before:,} raw → {total_after:,} QC-passing; "
-        f"{total_doublets:,} predicted doublets flagged",
-        fontsize=11,
-    )
-    fig.text(
-        0.5, -0.015,
-        "QC retained nuclei with at least 1,000 UMIs, at least 500 detected genes and at most 5% "
-        "mitochondrial counts (Lai et al., Nature 2024).",
-        ha="center", fontsize=8, color="#333333",
-    )
-    fig.savefig(OUTDIR / "Fig01_QC_overview.png", dpi=300, bbox_inches="tight")
+    ax.tick_params(axis="y", labelsize=10.5)
+    fig.savefig(OUTDIR / "Fig04_Celltype_abundance.png", dpi=500, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -136,7 +127,7 @@ def make_umap_figure(adata: ad.AnnData, meta: pd.DataFrame) -> None:
     ax.set_xticks([]); ax.set_yticks([])
     ax.legend(markerscale=5, frameon=False, fontsize=10.0,
               bbox_to_anchor=(1.01, 1), loc="upper left")
-    fig.savefig(OUTDIR / "Fig02_Celltype_annotation_UMAP.png", dpi=500, bbox_inches="tight")
+    fig.savefig(OUTDIR / "Fig05_Celltype_annotation_UMAP.png", dpi=500, bbox_inches="tight")
     plt.close(fig)
 
     fig, ax = plt.subplots(figsize=(7.5, 6.2), constrained_layout=True)
@@ -154,7 +145,7 @@ def make_umap_figure(adata: ad.AnnData, meta: pd.DataFrame) -> None:
     ax.set_xlabel("UMAP 1", fontsize=12.0)
     ax.set_ylabel("UMAP 2", fontsize=12.0)
     ax.set_xticks([]); ax.set_yticks([])
-    fig.savefig(OUTDIR / "Fig03_Louvain_clusters_UMAP.png", dpi=500, bbox_inches="tight")
+    fig.savefig(OUTDIR / "Fig06_Louvain_clusters_UMAP.png", dpi=500, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -206,7 +197,7 @@ def make_marker_dotplot(adata: ad.AnnData, meta: pd.DataFrame) -> None:
     handles = [plt.scatter([], [], s=4 + 80 * p, facecolor="white", edgecolor="0.4", label=f"{int(p*100)}%") for p in (0.1, 0.5, 0.9)]
     ax.legend(handles=handles, title="Expressing", frameon=False,
               bbox_to_anchor=(1.02, 0.18), loc="center left", fontsize=9.5, title_fontsize=10.0)
-    fig.savefig(OUTDIR / "Fig04_Celltype_marker_dotplot.png", dpi=400, bbox_inches="tight")
+    fig.savefig(OUTDIR / "Fig07_Celltype_marker_dotplot.png", dpi=400, bbox_inches="tight")
     plt.close(fig)
 
 
