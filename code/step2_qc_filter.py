@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Step2: Per-sample QC metrics + filtering (Author's Parameters)
+Step2: Per-sample QC metrics + project filtering parameters
 
 Input:
   Data_raw/step1_out_v2/counts_h5ad/*.counts.h5ad
@@ -8,7 +8,7 @@ Output:
   Data_raw/step2_out/qc_h5ad/*.qc.h5ad
   Data_raw/step2_out/qc_summary.tsv
 
-Author-reported exclusions (Reporting Summary / Data exclusions):
+Thresholds retained from the existing project workflow:
 - UMI < 1000 excluded
 - Genes < 500 excluded
 - Mitochondria content > 5% excluded
@@ -36,7 +36,9 @@ OUT_QC_DIR = os.path.join(OUT_ROOT, "qc_h5ad")
 OUT_SUMMARY = os.path.join(OUT_ROOT, "qc_summary.tsv")
 
 # -------------------------
-# QC thresholds (Author's Parameters)
+# QC thresholds used in this project reanalysis.
+# The public author notebook shows QC reference lines but not an unambiguous
+# executed subset command for all three metrics.
 # -------------------------
 MIN_GENES = 500          # genes >= 500
 MIN_COUNTS = 1000        # UMI >= 1000
@@ -102,7 +104,7 @@ def main():
         a.obs["n_genes_by_counts"] = n_genes
         a.obs["pct_counts_mt"] = pct_mt
 
-        # ---- Filtering (Author) ----
+        # ---- Filtering (project reanalysis) ----
         keep = (
             (a.obs["n_genes_by_counts"].values >= MIN_GENES) &
             (a.obs["total_counts"].values >= MIN_COUNTS) &
