@@ -6,8 +6,8 @@ only.pos=TRUE, min.pct=0.25 and logfc.threshold=0.25, followed by FeaturePlot,
 DotPlot and RenameIdents.  This Python implementation mirrors that logic with
 Scanpy's Wilcoxon rank-sum test on normalized log1p(CP10k) values.
 
-Predicted doublets are excluded from marker ranking but the historical v21
-H5AD is opened read-only and is never modified.
+Predicted doublets are excluded from marker ranking. The source H5AD is opened
+read-only and is never modified.
 """
 
 from __future__ import annotations
