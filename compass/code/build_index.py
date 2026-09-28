@@ -10,7 +10,7 @@ names += [('depth_control','資料量負對照：固定 donor 的反應分數變
 for name,label in names:
     cards.append(f'<section><h2>{label}</h2><a href="figures/{name}.png"><img src="figures/{name}.png" alt="{label}"></a><p><a href="figures/{name}.svg">SVG 向量圖</a></p></section>')
 links=''.join(f'<li><a href="manuscript/{f}">{label}</a></li>' for f,label in [
- ('SUMMARY_ZH.md','中文結論摘要'),('FIGURE_SOURCE_MAP.md','圖表、資料與程式對照'),('DEPTH_CONTROL_RESULTS_ZH.md','資料量負對照結果'),('RESULTS_AND_DISCUSSION.md','Results & Discussion'),('METHODS.md','Methods'),('FIGURE_LEGENDS.md','Figure legends'),('CODE_AVAILABILITY.md','Code & data availability')])
+ ('ANALYSIS_WORKFLOW.md','分析流程：從輸入到結果'),('REVIEW_STATUS.md','程式與結果核對'),('SUMMARY_ZH.md','中文結論摘要'),('FIGURE_SOURCE_MAP.md','圖表、資料與程式對照'),('DEPTH_CONTROL_RESULTS_ZH.md','資料量負對照結果'),('RESULTS_AND_DISCUSSION.md','Results & Discussion'),('METHODS.md','Methods'),('FIGURE_LEGENDS.md','Figure legends'),('CODE_AVAILABILITY.md','Code & data availability')])
 page='''<!doctype html><html lang="zh-Hant"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>COQ8A · MuSC · COMPASS</title>
 <style>body{max-width:960px;margin:36px auto;padding:0 20px;font:16px/1.7 Arial,"Microsoft JhengHei",sans-serif;color:#243341;background:#f4f6f8}h1{font-size:30px}h2{font-size:21px}a{color:#126980}section{background:white;padding:24px;margin:24px 0;border-radius:12px}img{width:100%;height:auto}code{background:#e6edf1;padding:3px 6px}small{color:#5c6972}</style>
 <h1>COQ8A / MuSC / COMPASS</h1><p>探索性年齡比較、COQ8A 關聯與資料量敏感度。原始 counts 與 CPM 已核對；生物年齡差異與取樣量的貢獻尚待分離。</p>
