@@ -9,6 +9,7 @@ from scipy.stats import rankdata, t, pearsonr
 import statsmodels.api as sm
 
 R=Path(__file__).resolve().parents[1];D=R/'data';T=R/'tables';T.mkdir(exist_ok=True)
+(R/'provenance').mkdir(exist_ok=True)
 RX={'COQ3m_pos':'CoQ (COQ3)','PDHm_pos':'PDH','ACITL_pos':'ACLY','ACS_pos':'ACS (AACS/ACSS2)',
     'CSm_pos':'Citrate synthase','ICDHy_pos':'IDH1','ICDHyrm_pos':'IDH2','SUCD1m_pos':'SDH'}
 AGE_RX=['COQ3m_pos','ACITL_pos','ACS_pos','PDHm_pos','CSm_pos','ACONTm_pos','ICDHxm_pos',
@@ -107,14 +108,18 @@ def main():
                 inter.append(dict(reaction=rx,label=label,scale=scale,adjustment=adj,beta=fit.params['coq_x_old'],p_raw=fit.pvalues['coq_x_old'],ci_low=ci.iloc[0],ci_high=ci.iloc[1]))
     it=pd.DataFrame(inter);it['q_bh_32']=bh(it.p_raw);save(it,'age_interactions')
     # Independent comparison against the previously generated results; tolerance allows JSON rounding only.
-    prior=pd.read_json(R/'provenance/pearson_spearman_age_20260927__correlations.json')
-    joined=c.merge(prior,on=['scope','reaction','method'],suffixes=('','_prior'))
-    assert len(joined)==72
-    assert np.allclose(joined.coefficient,joined.correlation_coefficient,atol=1e-8)
-    assert np.allclose(joined.p_raw,joined.p_raw_prior,atol=1e-8)
+    prior_path=R/'provenance/pearson_spearman_age_20260927__correlations.json'
+    historical_agreement=None
+    if prior_path.exists():
+        prior=pd.read_json(prior_path)
+        joined=c.merge(prior,on=['scope','reaction','method'],suffixes=('','_prior'))
+        assert len(joined)==72
+        assert np.allclose(joined.coefficient,joined.correlation_coefficient,atol=1e-8)
+        assert np.allclose(joined.p_raw,joined.p_raw_prior,atol=1e-8)
+        historical_agreement=True
     audit={'n_donors':21,'n_nuclei':int(meta.n_nuclei.sum()),'bi13_n_young':7,'bi13_n_older':6,
            'n_age_testable':int(testable.sum()),'full_selected_score_max_abs_difference':agreement,
-           'historical_72_correlations_reproduced':True,'seed':27092026,
+           'historical_72_correlations_reproduced':historical_agreement,'seed':27092026,
            'software':{'python':platform.python_version(),'numpy':np.__version__,'pandas':pd.__version__,'scipy':scipy.__version__}}
     assert int(testable.sum())==6533
     (R/'provenance/reproduction_audit.json').write_text(json.dumps(audit,indent=2)+'\n')
