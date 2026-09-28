@@ -12,7 +12,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import scanpy as sc
 from scipy import sparse
 
 
@@ -82,7 +81,7 @@ def prepare(h5ad: Path, metadata: Path, out_dir: Path, min_nuclei: int,
         "h5ad_path": str(h5ad.resolve()),
         "min_nuclei_per_donor": min_nuclei,
         "n_v22_musc_eligible_after_library_exclusion": int(((meta.cell_type_v22 == "MuSC") &
-                                       meta.primary_analysis_include_v22 &
+                                       meta.primary_analysis_include_v22.astype(str).str.lower().isin(["true", "1"]) &
                                        ~meta.sample_id.isin(DUPLICATED_SOURCE_LIBRARIES)).sum()),
         "n_selected_nuclei": len(cells),
         "n_selected_donors": len(selected),
@@ -97,6 +96,7 @@ def prepare(h5ad: Path, metadata: Path, out_dir: Path, min_nuclei: int,
         print(json.dumps(summary, indent=2))
         return
 
+    import scanpy as sc
     a = sc.read_h5ad(h5ad, backed="r")
     try:
         if "counts" not in a.layers:
