@@ -12,6 +12,8 @@ meta=pd.read_json(P/'profiles.json').set_index('profile')
 raw=pd.concat([pd.read_csv(P/b/'reactions.tsv',sep='\t',index_col=0) for b in ['pilot','remaining']],axis=1)
 assert raw.columns.is_unique and set(raw.columns)==set(meta.index)
 assert set(RX)<=set(raw.index) and np.isfinite(raw.values).all()
+assert raw.min().min()>=-1e-9, 'Negative reaction penalties'
+(R/'figures').mkdir(exist_ok=True)
 s=-np.log1p(raw.clip(lower=0));ref=pd.read_json(R/'tables/bi13_scores.json').set_index('compass_sample_id')
 maxdiff=max(abs(s.loc[rx,d+'__full__0']-ref.loc['MuSC__'+d,rx]) for d in meta.donor.unique() for rx in RX)
 assert maxdiff<1e-8,maxdiff
