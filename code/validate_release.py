@@ -74,6 +74,11 @@ def main() -> None:
     require(int(metadata["primary_analysis_include_v22"].sum()) == summary["n_primary_analysis"], "Primary-analysis count mismatch")
     require(metadata.groupby("louvain_r2")["cell_type_v22"].nunique().max() == 1, "A cluster has multiple cell-type labels")
 
+    unknown = metadata["cell_type_v22"].eq("Unknown")
+    require(set(metadata.loc[unknown, "louvain_r2"].astype(str)) == {"9", "22", "27", "29", "32"}, "Unknown cluster mapping changed")
+    require(int((unknown & metadata["is_singlet_v22"]).sum()) == 8788, "Unknown singlet count changed")
+    require(not metadata.loc[unknown, "primary_analysis_include_v22"].any(), "Unknown nuclei entered the primary analysis")
+
     config_map = config.set_index("cluster_id")["cell_type_v22"].sort_index()
     metadata_map = metadata.groupby(metadata["louvain_r2"].astype(str))["cell_type_v22"].first().sort_index()
     require(config_map.equals(metadata_map), "Cell-level annotations do not match the frozen cluster map")

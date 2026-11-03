@@ -36,6 +36,7 @@ CELLTYPE_ORDER = [
 ]
 
 PALETTE = {
+    "Unknown": "#888888",
     "Type I": "#377eb8", "Type II": "#e41a1c", "Specialized MF": "#984ea3",
     "FAP": "#ff7f00", "EC": "#4daf4a", "MuSC": "#a65628",
     "Myeloid cell": "#f781bf", "Lymphocyte": "#999999", "SMC": "#66c2a5",
@@ -130,6 +131,16 @@ def make_umap_figure(adata: ad.AnnData, meta: pd.DataFrame) -> None:
     fig, ax = plt.subplots(figsize=(7.5, 6.2), constrained_layout=True)
     for cell_type in sorted(pd.unique(types[singlet])):
         mask = singlet & (types == cell_type)
+        if cell_type == "Unknown":
+            # Preserve both original shades under one annotation in the legend.
+            prior = meta.loc[mask, "cell_type_before_unknown_merge"]
+            colours = prior.map(PALETTE)
+            if colours.isna().any():
+                raise ValueError("Missing palette entry for an Unknown subgroup")
+            ax.scatter(coords[mask, 0], coords[mask, 1], s=0.85, alpha=0.60,
+                       color=colours.to_list(), rasterized=True)
+            ax.scatter([], [], s=0.85, color=PALETTE["Unknown"], label="Unknown")
+            continue
         ax.scatter(coords[mask, 0], coords[mask, 1], s=0.85, alpha=0.60,
                    color=PALETTE.get(cell_type, "#999999"), rasterized=True, label=cell_type)
     ax.set(xlabel="UMAP 1", ylabel="UMAP 2", title="Cell-type annotations")

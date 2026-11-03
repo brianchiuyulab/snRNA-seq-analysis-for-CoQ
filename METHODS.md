@@ -51,7 +51,9 @@ NCAM1; muscle stem cells by PAX7 and CD82; fibro-adipogenic progenitors by
 PDGFRA, DCN and COL1A2; endothelial cells by PECAM1, VWF, EMCN and RHOJ;
 smooth-muscle/pericyte populations by PDGFRB, NOTCH3, CARMN and TAGLN; and
 immune and adipocyte populations by their established lineage markers. Clusters
-without sufficient lineage-specific evidence were designated unresolved.
+without sufficient lineage-specific evidence were grouped as Unknown (clusters 9, 22, 27, 29 and 32; 8,788 singlet nuclei).
+The two earlier unresolved labels are retained in the cell metadata. These
+clusters remain excluded from the primary donor-level analysis.
 
 ## Donor-level CoQ-pathway analysis
 

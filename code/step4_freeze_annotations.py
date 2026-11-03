@@ -83,7 +83,7 @@ def main() -> None:
         "doublet_score", "predicted_doublet", "louvain_r2",
         "paper_celltype_cluster_level_final2", "Donor", "Age", "Sex", "Cohort", "Muscle",
         "Body_Mass_Index_BMI", "Charlson_Index_CI", "Barthel_Index_BI", "age_group",
-        "cell_type_v22", "cell_state_v22", "myonuclear_parent_v22", "annotation_confidence", "change_class",
+        "cell_type_v22", "cell_type_before_unknown_merge", "cell_state_v22", "myonuclear_parent_v22", "annotation_confidence", "change_class",
         "positive_marker_evidence", "interpretation_note", "is_singlet_v22",
         "primary_analysis_include_v22",
     ]
