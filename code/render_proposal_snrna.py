@@ -41,20 +41,21 @@ def tab(name):
 
 types=["Type I","Type II","Specialized MF","MuSC","FAP","EC","SMC","Adipocyte","Myeloid cell","Lymphocyte"]
 palette=["#377eb8","#e41a1c","#984ea3","#a65628","#ff7f00","#4daf4a","#66c2a5","#e6ab02","#f781bf","#999999","#888888"]
-p=Panel("5A","Nuclear annotations",165,100)
+p=Panel("5A","Nuclear annotations",165,113)
 im=np.asarray(Image.open(root/"figures/Fig05_Celltype_annotation_UMAP.png").convert("RGB"))
 dark=im.max(2)<120
 ys=np.where(dark.mean(1)>.45)[0];xs=np.where(dark.mean(0)>.60)[0]
 if not(len(ys) and len(xs)):raise ValueError("Could not locate source UMAP axes")
-ax=p.ax(12,14,69,73);ax.imshow(im[ys[0]+2:ys[-1]-2,xs[0]+2:xs[-1]-2],aspect="equal");ax.set(xticks=[],yticks=[],xlabel="UMAP 1",ylabel="UMAP 2")
+ax=p.ax(12,13,82,87);ax.imshow(im[ys[0]+2:ys[-1]-2,xs[0]+2:xs[-1]-2],aspect="equal");ax.set(xticks=[],yticks=[],xlabel="UMAP 1",ylabel="UMAP 2")
 for i,(label,color) in enumerate(zip(types+["Unknown"],palette)):
-    p.key(86,17+7.8*i,color,label)
+    p.key(100,17+7.8*i,color,label)
 p.save()
 p=Panel("5B","Cell-type marker expression",308,114)
 v=tab("celltype_marker_dotplot_values.tsv.gz")
 genes=v.gene.drop_duplicates().tolist()
 assert len(genes)==28 and set(v.cell_type)==set(types)
 ax=p.ax(54,14,203,69)
+for edge in (4.5,8.5,11.5,15.5,17.5,19.5,23.5,25.5):ax.axvline(edge,c="#d8d8d8",lw=.45,zorder=0)
 sc=ax.scatter(v.gene.map(dict(zip(genes,range(len(genes))))),v.cell_type.map(dict(zip(types,range(10)))),
               s=1+15*v.pct_expressing,c=v.mean_z_by_gene,cmap="RdBu_r",vmin=-2,vmax=2,edgecolors=".5",linewidths=.15)
 ax.set(xticks=range(len(genes)),yticks=range(10),xlim=(-.5,27.5),ylim=(9.5,-.5))
@@ -75,6 +76,8 @@ ax=p.ax(36,17,111,86);threshold=v.p_adjusted_bh_within_gene_celltype<.05
 sig=-np.log10(v.p_adjusted_bh_within_gene_celltype.clip(lower=1e-12));lim=max(1,np.nanpercentile(abs(v.log2_fold_change),95))
 xx=v.cell_type.map(dict(zip(types,np.arange(4)*2)))+v.comparison.str.contains("<").astype(int)
 yy=v.gene.map(dict(zip(genes,range(len(genes)))))
+ax.axhspan(genes.index("COQ8A")-.45,genes.index("COQ8A")+.45,color="#f7ecf3",zorder=0)
+for edge in (1.5,3.5,5.5):ax.axvline(edge,c="#ddd",lw=.45,zorder=0)
 sc=ax.scatter(xx,yy,s=3+8*sig.clip(upper=4),c=v.log2_fold_change,cmap="RdBu_r",vmin=-lim,vmax=lim,edgecolors=np.where(threshold,"#99005c","#777"),lw=np.where(threshold,.85,.2))
 ax.set(xlim=(-.55,7.55),ylim=(12.5,-.5),xticks=np.arange(8),yticks=range(len(genes)));ax.set_xticklabels(["=","<"]*4);ax.set_yticklabels(genes);ax.tick_params(length=0)
 for i,s in enumerate(short):p.text(36+(2*i+1)*111/8,116,s,ha="center")

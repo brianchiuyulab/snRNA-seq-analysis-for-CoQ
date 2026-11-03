@@ -172,3 +172,5 @@ Generate the vector PDF and SVG panels from the final release:
     python code/render_proposal_compass.py --release /path/to/compass_manuscript_release --out /path/to/panels
 
 The nuclear UMAP uses the released Unknown annotation; dots, donor distributions and COMPASS scores use the published tables. The COMPASS input is the 13-donor companion release. Axes and legends are set at final print size.
+
+The working-master panels preserve the subtype labels in the UMAP, the COQ8A highlight in the donor display, and the cohort annotation in the COMPASS panel. Use the same panel exports for the summary and proposal.

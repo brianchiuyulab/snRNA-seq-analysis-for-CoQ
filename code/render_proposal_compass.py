@@ -51,7 +51,12 @@ p.text(x0+width*3.5/13,20,"Young (n = 7)",ha="center",color=colors[0],weight="bo
 p.text(x0+width*10/13,20,"Older (n = 6)",ha="center",color=colors[1],weight="bold")
 for j,(lab,vals) in enumerate([("Cohort",donors.cohort.map({"European":"EU","Asian Chinese":"AC"})),("BI",donors.barthel_index.map(lambda x:"–" if pd.isna(x) else str(int(x)))),("Nuclei",donors.n_nuclei)]):
     y=31+j*9;p.text(x0-3,y,lab,ha="right")
-    for i,val in enumerate(vals):p.text(x0+(i+.5)*width/13,y,str(val),ha="center")
+    for i,val in enumerate(vals):
+        age=donors.age_label.iloc[i];cohort=donors.cohort.iloc[i]
+        from matplotlib.patches import Rectangle
+        bg=("#c6deea" if cohort=="European" else "#d8d0e8") if lab=="Cohort" else (plt.cm.YlGnBu(.15+.65*float(val)/100) if lab=="BI" and str(val)!="–" else ("#e1e1e1" if lab=="BI" else plt.cm.Greys(.12+.55*np.log10(max(1,float(val)))/3.1)))
+        p.fig.add_artist(Rectangle(((x0+i*width/13)/p.w,1-(y+1)/p.h),width/13/p.w,8/p.h,transform=p.fig.transFigure,facecolor=bg,edgecolor="white",lw=.2,zorder=0))
+        p.text(x0+(i+.5)*width/13,y,str(val),ha="center",color="white" if lab=="BI" and str(val)!="–" and float(val)>=75 else "black")
 v=bi[rx].T;z=v.sub(v.mean(axis=1),axis=0).div(v.std(axis=1,ddof=0).replace(0,np.nan),axis=0)
 ax=p.ax(x0,53,width,111);im=ax.imshow(z,aspect="auto",vmin=-2,vmax=2,cmap=plt.get_cmap("RdBu_r").with_extremes(bad="#dddddd"),interpolation="nearest")
 ax.axvline(6.5,c="white",lw=1);ax.set(yticks=range(15),xticks=range(13));ax.set_yticklabels(labels);ax.set_xticklabels(donors.donor_id,rotation=90);ax.tick_params(length=0)
