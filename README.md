@@ -160,3 +160,15 @@ in this reanalysis were obtained from OMIX004308.
   *Nature* 628, 154-164 (2024). https://doi.org/10.1038/s41586-024-07348-6
 - Source annotation notebook:
   https://github.com/123anjuan/HMA/blob/main/block%201/hu-snRNAseq_prior_annotation.Rmd
+
+## Printed proposal panels (Figures 5A–D and 8A–B)
+
+Generate the vector PDF and SVG panels from the final release:
+
+    python code/render_proposal_snrna.py --release /path/to/snrna_release --out /path/to/panels
+
+Generate the vector PDF and SVG panels from the final release:
+
+    python code/render_proposal_compass.py --release /path/to/compass_manuscript_release --out /path/to/panels
+
+The nuclear UMAP uses the released Unknown annotation; dots, donor distributions and COMPASS scores use the published tables. The COMPASS input is the 13-donor companion release. Axes and legends are set at final print size.
