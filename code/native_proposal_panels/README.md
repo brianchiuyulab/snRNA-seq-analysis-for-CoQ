@@ -1,0 +1,15 @@
+# Native proposal Figures 5 and 8
+
+The script builds two PowerPoint slides. Slide 1 is Figure 5 (human muscle snRNA-seq and mouse injury spatial transcriptomics). Slide 2 is Figure 8 (human MuSC COMPASS and chromatin accessibility). It uses the approved 2 November figure object master and the original public analysis releases. The working master used for this export has SHA-256 c83bdc9282ecc9df8f9c8f392a11997968291928b7b0a5682c7f60b7d7732be9. Image IDs refer to that source archive.
+
+Install python-pptx, numpy, pandas, Pillow, matplotlib and scipy. Run:
+
+    python render_human_spatial_panels.py --figures original_figures.pptx --snrna snrna_release --spatial spatial_release --compass compass_manuscript_release --atac coq8a_multiome_release --out human.pptx
+
+Source identities and checks:
+
+* Figure 5A retains the twelve cell labels and UMAP cloud in the original November master, including both unresolved categories. B takes all 280 observations (10 cell types × 28 marker genes) from celltype_marker_dotplot_values.tsv.gz. Marker area and clipped [−2, 2] colour mapping follow make_qc_annotation_figures.py. C takes the 13-gene × 8-comparison grid from COQ_statistics.tsv. The area is proportional to 22 + 33 × min(4, −log10(q)), where q is the BH-adjusted value within a gene/cell-type pair. Colour uses log2 fold change and the 95th-percentile absolute-value limit used by make_coq_donor_figure.py.
+* Figure 5D takes all log1p_cpm observations for COQ8A from COQ_donor_pseudobulk.tsv.gz. Each of the four cell types has seven young, three older BI = 100 and three older BI < 100 donor values. It uses the source quartiles, median, 1.5-IQR Tukey whiskers and deterministic jitter. Each donor is shown, including points beyond whiskers. Both MuSC brackets refer to adjusted p = 0.033333. Their unadjusted values are 0.033333 and 0.022245.
+* The four maps in 5E/F use the same physical-to-layout scale derived from the original 500-µm calibration bars; equal presentation frames use padding. All 15 cell labels and four overlay symbols are retained. 5G–J use fusing_marker_audit.tsv, coq8a_celltype_association.tsv, coq8a_region_detection.tsv and coq8a_fusion_neighborhood.tsv. Adjusted significance on H refers to 15 cell labels per section; J uses the released adjustment across 10 sample/radius tests.
+* Figure 8A preserves the 15 × 13 reaction/donor matrix colours in the approved source. Donor IDs, age, cohort, BI and nucleus counts are taken from COMPASS_CoQ_donor_audit_20261102.tsv. B uses the archived observations and group medians of the corresponding 13-donor COMPASS cohort. C uses the 565-row, 527-pair fixed D206 peak screen and the six released q25 < 0.05 neighbourhood annotations. D uses the original MYOD1 100-bp profiles, the original Gaussian smoothing (one-bin sigma), the gene TSS and the peak interval 17,653,349–17,654,252.
+* PowerPoint text, dot plots, confidence intervals, line graphs and legends are separate objects. Images retain continuous spatial/UMAP measurements or dense matrix textures. Perform print QA on the final Word/export geometry, not a zoomed presentation view.

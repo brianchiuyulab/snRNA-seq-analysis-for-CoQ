@@ -174,3 +174,8 @@ Generate the vector PDF and SVG panels from the final release:
 The nuclear UMAP uses the released Unknown annotation; dots, donor distributions and COMPASS scores use the published tables. The COMPASS input is the 13-donor companion release. Axes and legends are set at final print size.
 
 The working-master panels preserve the subtype labels in the UMAP, the COQ8A highlight in the donor display, and the cohort annotation in the COMPASS panel. Use the same panel exports for the summary and proposal.
+
+## Native proposal figures
+
+[Figure 5 and Figure 8 PowerPoint renderer and source mapping](code/native_proposal_panels/README.md). The script retains the approved historical annotations and independently editable labels, plot marks, and spatial image frames.
+
